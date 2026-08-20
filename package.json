@@ -5,7 +5,8 @@
   "description": "Clean up and categorize bank statements",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "echo \"Nothing to build - the app is a single static HTML file.\""
   },
   "engines": {
     "node": ">=18"
