@@ -1,0 +1,24 @@
+# Render Blueprint. In Render: New > Blueprint, point it at this repo.
+#
+# The disk is what makes settings survive restarts, and disks require a paid
+# instance. On the free plan the filesystem is wiped every time the service
+# spins down (after 15 minutes idle), so settings would not last.
+services:
+  - type: web
+    name: ledger-cleaner
+    runtime: node
+    plan: starter            # disks are not available on `plan: free`
+    buildCommand: ""         # zero dependencies, nothing to install
+    startCommand: node server.js
+    healthCheckPath: /healthz
+    disk:
+      name: ledger-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /var/data
+      - key: APP_USER
+        value: me
+      - key: APP_PASSWORD
+        sync: false          # set this yourself in the Render dashboard

@@ -1,0 +1,2755 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger Cleaner</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128179;</text></svg>">
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  #boot { min-height:100vh; display:grid; place-items:center; background:#f1f5f9; color:#334155;
+          font-size:14px; text-align:center; padding:24px; }
+  #boot code { background:#e2e8f0; padding:1px 5px; border-radius:4px; }
+</style>
+</head>
+<body>
+<div id="root"><div id="boot"><div>
+  <p id="boot-msg">Loading&hellip;</p>
+  <p style="color:#94a3b8;font-size:12px;margin-top:8px">First load needs an internet connection.</p>
+</div></div></div>
+
+<!-- The app source. Not executed directly; transpiled once the libraries land. -->
+<script type="text/plain" id="app-source">
+
+/* ============================================================================
+ * 1. CATEGORIES  — edit this list freely; anything here shows in the dropdown.
+ * ==========================================================================*/
+const DEFAULT_CATEGORIES = [
+  "Income", "Transfers", "Investments",
+  "Groceries", "Restaurants", "Fast Food", "Coffee",
+  "Gas & Fuel", "Auto & Transport", "Rideshare",
+  "Shopping", "Subscriptions", "Utilities", "Rent & Mortgage",
+  "Insurance", "Healthcare", "Pharmacy", "Fitness",
+  "Entertainment", "Travel", "Home & Garden", "Personal Care",
+  "Pets", "Kids & Education", "Gifts & Donations",
+  "Cash & ATM", "Fees & Interest", "Taxes", "Business",
+  "Uncategorized",
+];
+
+/* Renaming or removing these would quietly change how the app calculates:
+   Transfers is excluded from spending totals, Uncategorized drives the review
+   count, and Income is the fallback for unmatched deposits. */
+const SYSTEM_CATEGORIES = new Set(["Income", "Transfers", "Uncategorized"]);
+
+/* ============================================================================
+ * 2. MERCHANT ALIASES — matched against the RAW string first. If one hits,
+ *    the canonical name is used as-is and all scrubbing is skipped.
+ *    Add lines here as you find merchants that come through ugly.
+ * ==========================================================================*/
+const ALIASES = [
+  [/AMZN MKTP|AMAZON\.COM|\bAMZN\b|AMAZON RETA|AMAZON MKTPL/i, "Amazon"],
+  [/AMAZON PRIME|PRIME VIDEO/i, "Amazon Prime"],
+  [/WHOLEFDS|WHOLE FOODS/i, "Whole Foods"],
+  [/WM SUPERCENTER|WAL-?MART|WALMART/i, "Walmart"],
+  [/\bTARGET\b|TARGET\.COM|\bTGT\b/i, "Target"],
+  [/COSTCO WHSE|COSTCO GAS|\bCOSTCO\b/i, "Costco"],
+  [/TRADER JOE/i, "Trader Joe's"],
+  [/STATER BROS/i, "Stater Bros"],
+  [/\bVONS\b/i, "Vons"],
+  [/\bRALPHS\b/i, "Ralphs"],
+  [/ALBERTSONS/i, "Albertsons"],
+  [/SPROUTS FARMERS|SPROUTS FM/i, "Sprouts"],
+  [/STARBUCKS|\bSBUX\b/i, "Starbucks"],
+  [/DUTCH BROS/i, "Dutch Bros"],
+  [/DUNKIN/i, "Dunkin'"],
+  [/MCDONALD/i, "McDonald's"],
+  [/CHICK-?FIL-?A/i, "Chick-fil-A"],
+  [/IN-?N-?OUT/i, "In-N-Out"],
+  [/CHIPOTLE/i, "Chipotle"],
+  [/TACO BELL/i, "Taco Bell"],
+  [/PANDA EXPRESS/i, "Panda Express"],
+  [/RAISING CANE/i, "Raising Cane's"],
+  [/DD ?\*? ?DOORDASH|DOORDASH/i, "DoorDash"],
+  [/UBER ?\*? ?EATS/i, "Uber Eats"],
+  [/GRUBHUB/i, "Grubhub"],
+  [/UBER ?\*? ?TRIP|\bUBER\b/i, "Uber"],
+  [/\bLYFT\b/i, "Lyft"],
+  [/NETFLIX/i, "Netflix"],
+  [/SPOTIFY/i, "Spotify"],
+  [/\bHULU\b/i, "Hulu"],
+  [/DISNEY ?PLUS|DISNEYPLUS/i, "Disney+"],
+  [/APPLE\.COM\/BILL|APL\*ITUNES|\bITUNES\b|APPLE\.COM/i, "Apple"],
+  [/GOOGLE ?\*? ?YOUTUBE|YOUTUBEPREMIUM/i, "YouTube"],
+  [/GOOGLE ?\*? ?(STORAGE|ONE)/i, "Google One"],
+  [/\bOPENAI\b|CHATGPT/i, "OpenAI"],
+  [/ANTHROPIC|CLAUDE\.AI/i, "Anthropic"],
+  [/ADOBE/i, "Adobe"],
+  [/MICROSOFT|MSFT ?\*/i, "Microsoft"],
+  [/CVS\/?PHARM|\bCVS\b/i, "CVS"],
+  [/WALGREEN/i, "Walgreens"],
+  [/RITE AID/i, "Rite Aid"],
+  [/HOME DEPOT|THE HOME DEPOT/i, "Home Depot"],
+  [/LOWE'?S/i, "Lowe's"],
+  [/\bCHEVRON\b/i, "Chevron"],
+  [/SHELL OIL|SHELL SERVICE|\bSHELL\b/i, "Shell"],
+  [/\bARCO\b/i, "ARCO"],
+  [/\bMOBIL\b|EXXONMOBIL/i, "Mobil"],
+  [/CIRCLE ?K/i, "Circle K"],
+  [/7-?ELEVEN/i, "7-Eleven"],
+  [/SO ?CAL ?EDISON|SOUTHERN CALIF EDISON|SCE /i, "SoCal Edison"],
+  [/SOCALGAS|SO CAL GAS/i, "SoCalGas"],
+  [/CUCAMONGA VALLEY WATER|CVWD/i, "Cucamonga Valley Water"],
+  [/\bBURRTEC\b/i, "Burrtec"],
+  [/T-?MOBILE/i, "T-Mobile"],
+  [/\bVERIZON\b/i, "Verizon"],
+  [/AT&?T|ATT\*BILL/i, "AT&T"],
+  [/SPECTRUM|CHARTER COMM/i, "Spectrum"],
+  [/XFINITY|COMCAST/i, "Xfinity"],
+  [/\bGEICO\b/i, "GEICO"],
+  [/STATE FARM/i, "State Farm"],
+  [/PROGRESSIVE/i, "Progressive"],
+  [/PLANET FIT/i, "Planet Fitness"],
+  [/24 ?HOUR ?FIT/i, "24 Hour Fitness"],
+  [/LA FITNESS/i, "LA Fitness"],
+  [/\bUSPS\b|POSTAL SERVICE/i, "USPS"],
+  [/\bFEDEX\b/i, "FedEx"],
+  [/\bUPS STORE\b|\bUPS\b/i, "UPS"],
+  [/\bIKEA\b/i, "IKEA"],
+  [/\bROSS STORES?\b|ROSS DRESS/i, "Ross"],
+  [/\bTJ ?MAXX\b|TJMAXX/i, "TJ Maxx"],
+  [/MARSHALLS/i, "Marshalls"],
+  [/\bULTA\b/i, "Ulta"],
+  [/SEPHORA/i, "Sephora"],
+  [/PETSMART/i, "PetSmart"],
+  [/\bPETCO\b/i, "Petco"],
+  [/\bCHEWY\b/i, "Chewy"],
+  [/\bVENMO\b/i, "Venmo"],
+  [/CASH ?APP|SQUARE CASH/i, "Cash App"],
+  [/\bZELLE\b/i, "Zelle"],
+  [/PAYPAL ?\*? ?TRANSFER|\bPAYPAL\b/i, "PayPal"],
+  [/\bAMC\b ?(THEATRE|\d)/i, "AMC Theatres"],
+  [/\bREGAL\b ?(CINEMA|\d)/i, "Regal Cinemas"],
+  [/AUTOZONE/i, "AutoZone"],
+  [/O'?REILLY AUTO/i, "O'Reilly Auto Parts"],
+  [/JIFFY LUBE/i, "Jiffy Lube"],
+  [/DISCOUNT TIRE|AMERICA'?S TIRE/i, "Discount Tire"],
+];
+
+/* ============================================================================
+ * 3. CATEGORY RULES — first match wins, so order matters.
+ *    Tested against the cleaned name AND the raw string.
+ * ==========================================================================*/
+const CATEGORY_RULES = [
+  // --- money coming in -------------------------------------------------
+  [/PAYROLL|DIRECT DEP|DIR DEP|\bSALARY\b|\bADP\b|GUSTO|PAYCHEX|SSA TREAS|IRS TREAS 310|UNEMPLOYMENT|\bEDD\b|PENSION|DIVIDEND|INTEREST (PAID|EARNED)|REIMBURSE/i, "Income"],
+  // --- moving your own money -------------------------------------------
+  [/ZELLE|VENMO|CASH ?APP|\bTRANSFER\b|\bXFER\b|PAYMENT THANK YOU|AUTOPAY|CARD PAYMENT|CREDIT CARD (PMT|PAYMENT)|BALANCE TRANSFER|WIRE (IN|OUT|TRANSFER)/i, "Transfers"],
+  [/ROBINHOOD|COINBASE|FIDELITY|VANGUARD|SCHWAB|E\*TRADE|BETTERMENT|ACORNS|WEALTHFRONT|\bIRA\b|BROKERAGE/i, "Investments"],
+  // --- bank noise --------------------------------------------------------
+  [/OVERDRAFT|NSF FEE|MONTHLY (SERVICE|MAINTENANCE) FEE|ANNUAL FEE|LATE FEE|FOREIGN TRANSACTION|ATM FEE|INTEREST CHARGE|FINANCE CHARGE|SERVICE CHARGE/i, "Fees & Interest"],
+  [/\bATM\b|CASH WITHDRAWAL|WITHDRAWAL AT/i, "Cash & ATM"],
+  // --- food --------------------------------------------------------------
+  [/UBER EATS|DOORDASH|GRUBHUB|POSTMATES|SEAMLESS|CAVIAR/i, "Restaurants"],
+  [/STARBUCKS|DUNKIN|DUTCH BROS|PEET|BLUE BOTTLE|CARIBOU|\bCOFFEE\b|ESPRESSO|\bBOBA\b|TEA HOUSE/i, "Coffee"],
+  [/MCDONALD|BURGER KING|WENDY|TACO BELL|CHICK-?FIL|CHIPOTLE|SUBWAY|IN-?N-?OUT|POPEYE|\bKFC\b|JACK IN THE BOX|DEL TACO|CARL'?S JR|PANDA EXPRESS|FIVE GUYS|SHAKE SHACK|WINGSTOP|RAISING CANE|JERSEY MIKE|PANERA|JIMMY JOHN|LITTLE CAESAR|DOMINO|PAPA JOHN/i, "Fast Food"],
+  [/RESTAURANT|GRILL|CANTINA|BISTRO|SUSHI|PIZZ|TAQUERIA|KITCHEN|BREWING|BREWERY|STEAKHOUSE|DINER|\bCAFE\b|RAMEN|\bTHAI\b|BUFFET|OLIVE GARDEN|CHEESECAKE|APPLEBEE|DENNY|IHOP|RED ROBIN|BUFFALO WILD|OUTBACK|CHILI'?S/i, "Restaurants"],
+  [/VONS|RALPHS|STATER|ALBERTSONS|SAFEWAY|KROGER|TRADER JOE|WHOLE ?FOODS|WHOLEFDS|SPROUTS|\bALDI\b|COSTCO|SAMS CLUB|WINCO|FOOD 4 LESS|SUPERIOR GROCER|CARDENAS|H MART|99 RANCH|GROCER|SUPERMARKET/i, "Groceries"],
+  // --- getting around -----------------------------------------------------
+  [/\bUBER\b|\bLYFT\b|\bTAXI\b/i, "Rideshare"],
+  [/CHEVRON|\bSHELL\b|\bARCO\b|\bMOBIL\b|EXXON|VALERO|SUNOCO|CIRCLE ?K|QUIKTRIP|SPEEDWAY|UNION 76|\bFUEL\b|GAS ?STATION/i, "Gas & Fuel"],
+  [/AUTOZONE|O'?REILLY|PEP BOYS|JIFFY LUBE|VALVOLINE|MIDAS|FIRESTONE|DISCOUNT TIRE|\bDMV\b|\bSMOG\b|CAR WASH|FORD CREDIT|CARMAX|PARKING|\bTOLL\b|FASTRAK|METROLINK|\bTRANSIT\b|AUTO PARTS/i, "Auto & Transport"],
+  // --- bills ---------------------------------------------------------------
+  [/\bRENT\b|MORTGAGE|PROPERTY MGMT|\bHOA\b|LEASING|APARTMENT/i, "Rent & Mortgage"],
+  [/EDISON|SOCALGAS|SO CAL GAS|WATER DIST|CUCAMONGA VALLEY|SEWER|\bTRASH\b|BURRTEC|SPECTRUM|COX COMM|FRONTIER COMM|VERIZON|AT&?T|T-?MOBILE|XFINITY|COMCAST|UTILITY|ELECTRIC CO|POWER CO/i, "Utilities"],
+  [/GEICO|STATE FARM|PROGRESSIVE|ALLSTATE|FARMERS INS|\bUSAA\b|MERCURY INS|\bAAA\b|INSURANCE|BLUE SHIELD|ANTHEM/i, "Insurance"],
+  [/NETFLIX|SPOTIFY|HULU|DISNEY ?\+?|HBO|PARAMOUNT|PEACOCK|APPLE|ITUNES|YOUTUBE|AUDIBLE|PATREON|SUBSTACK|ADOBE|MICROSOFT|OFFICE 365|DROPBOX|NOTION|CANVA|CHATGPT|OPENAI|ANTHROPIC|GITHUB|NYTIMES|\bWSJ\b|PLAYSTATION|XBOX|NINTENDO|\bSTEAM\b|GOOGLE ONE|SUBSCRIPTION/i, "Subscriptions"],
+  // --- health & body ---------------------------------------------------------
+  [/\bCVS\b|WALGREEN|RITE AID|PHARMACY|GOODRX/i, "Pharmacy"],
+  [/MEDICAL|CLINIC|HOSPITAL|DENTAL|DENTIST|OPTOMETR|\bVISION\b|LABCORP|QUEST DIAG|KAISER|URGENT CARE|PHYSICIAN|\bHEALTH\b/i, "Healthcare"],
+  [/\bGYM\b|FITNESS|PLANET FIT|24 HOUR|CROSSFIT|\bYOGA\b|PELOTON|CLASSPASS|PILATES/i, "Fitness"],
+  [/SALON|BARBER|\bSPA\b|NAILS|\bULTA\b|SEPHORA|SUPERCUTS|MASSAGE|HAIRCUT/i, "Personal Care"],
+  // --- life ------------------------------------------------------------------
+  [/PETSMART|PETCO|CHEWY|\bVET\b|VETERINAR|ANIMAL HOSP/i, "Pets"],
+  [/SCHOOL|TUITION|UNIVERSITY|COLLEGE|DAYCARE|CHILDCARE|KUMON|STUDENT LOAN|NAVIENT|NELNET|SALLIE MAE|SCHOLASTIC/i, "Kids & Education"],
+  [/CHURCH|DONAT|GOFUNDME|RED CROSS|GOODWILL|SALVATION ARMY|CHARITY|UNICEF|WIKIMEDIA/i, "Gifts & Donations"],
+  [/HOME DEPOT|LOWE'?S|ACE HARDWARE|HARBOR FREIGHT|SHERWIN|FURNITURE|ASHLEY HOME|MATTRESS|\bLAWN\b|GARDEN|POOL SUPPL|PLUMB|\bHVAC\b|ELECTRICIAN|\bIKEA\b|WAYFAIR/i, "Home & Garden"],
+  [/AIRLINE|AMERICAN AIR|\bDELTA\b|UNITED AIR|SOUTHWEST|ALASKA AIR|SPIRIT AIR|JETBLUE|\bHOTEL\b|MARRIOTT|HILTON|HYATT|AIRBNB|VRBO|EXPEDIA|BOOKING\.COM|PRICELINE|TSA PRE|GLOBAL ENTRY|HERTZ|ENTERPRISE RENT|\bAVIS\b|AMTRAK|\bINN\b/i, "Travel"],
+  [/\bAMC\b|CINEMARK|REGAL|MOVIE|THEATRE|THEATER|TICKETMASTER|STUBHUB|EVENTBRITE|SIX FLAGS|KNOTT|DISNEYLAND|UNIVERSAL STUDIO|CONCERT|BOWLING|\bGOLF\b|DAVE & BUSTER/i, "Entertainment"],
+  [/\bIRS\b|FRANCHISE TAX|TAX PMT|TURBOTAX|H&R BLOCK|TAX PREP/i, "Taxes"],
+  [/USPS|UPS STORE|FEDEX|STAPLES|OFFICE DEPOT|QUICKBOOKS|\bSTRIPE\b|SHOPIFY|GODADDY|NAMECHEAP|\bAWS\b|GOOGLE CLOUD|DIGITALOCEAN/i, "Business"],
+  [/AMAZON|AMZN|TARGET|WALMART|BEST BUY|\bROSS\b|MARSHALLS|TJ ?MAXX|NORDSTROM|MACY|KOHL|OLD NAVY|\bH&M\b|ZARA|UNIQLO|SHEIN|TEMU|ETSY|EBAY|MICHAELS|JOANN|HOBBY LOBBY|BARNES|GAMESTOP|DICK'?S SPORTING|\bREI\b|NIKE|ADIDAS|LULULEMON|\bDSW\b|FOOT LOCKER/i, "Shopping"],
+];
+
+/* ============================================================================
+ * 4. NAME CLEANUP — only runs when no alias matched.
+ * ==========================================================================*/
+const STATES = "AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY|DC";
+const STATE_SET = new Set(STATES.split("|"));
+
+const PREFIX_SCRUB = [
+  /^(purchase|recurring payment|payment)\s+authorized\s+on\s+\d{1,2}\/\d{1,2}\s*/i,
+  /^(pos|pin)\s+(purchase|debit|credit)?\s*/i,
+  /^(debit|credit)\s+card\s+(purchase|payment)?\s*/i,
+  /^check\s?card\s+\d{0,4}\s*/i,
+  /^(visa|mastercard|amex|discover)\s+(purchase|payment|debit|credit)?\s*/i,
+  /^(ach|eft)\s+(debit|credit|payment|deposit|withdrawal|pmt)?\s*/i,
+  /^(external|internal|online|mobile|internet|electronic|preauthorized|recurring|automatic)\s+/i,
+  /^(withdrawal|deposit)\s+/i,
+  /^(withdrawal|deposit|purchase|payment|transfer)\s+(at|to|from|-)\s*/i,
+  /^(sq|tst|py|in|sp|dd|eb|wpy|pp|paypal|clover|toast|levelup|ip|gp|msft|apl)\s*\*+\s*/i,
+  /^\d{1,2}\/\d{1,2}(\/\d{2,4})?\s+/,
+];
+
+const INLINE_SCRUB = [
+  /\b(web|ppd|ccd|tel|arc|ctx)\s*id:?\s*\S+/gi,
+  /\bdes:\s*\S+/gi,
+  /\bindn:\s*/gi,
+  /\bref\s*#?\s*\w{5,}/gi,
+  /\btrace\s*#?\s*\w+/gi,
+  /\bconf(irmation)?\s*#?\s*\w{5,}/gi,
+  /\bx{2,}\d{2,}\b/gi,
+  /\*{2,}\d{2,}\b/g,
+  /\bcard\s?\d{4}\b/gi,
+  /\b\d{3}[-.]\d{3}[-.]\d{4}\b/g,
+  /\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/g,
+  /\b[a-z0-9-]+\.(com|net|org|co|io|us)\b/gi,
+  /\bstore\s+#?\d+\b/gi,
+  /\s#\s?\d+\b/g,
+  /\b\d{7,}\b/g,
+];
+
+const KEEP_UPPER = new Set(["ATM","USPS","UPS","DMV","IRS","CVS","IKEA","BP","KFC","LLC","INC","LLP","US","USA","AMC","REI","GNC","ULTA","TSA","DSW","HOA","AAA","CO","IHOP","BJS","QT","MTA","EDD","SCE","HEB"]);
+const SMALL_WORDS = new Set(["of","and","the","a","an","in","on","at","to","for","de","la","el","by"]);
+
+function titleCase(s) {
+  return s
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w, i) => {
+      const bare = w.replace(/[^A-Za-z&']/g, "");
+      if (KEEP_UPPER.has(bare.toUpperCase())) return w.toUpperCase();
+      const lower = w.toLowerCase();
+      if (i > 0 && SMALL_WORDS.has(lower)) return lower;
+      return lower.replace(/^[a-z]/, (c) => c.toUpperCase()).replace(/([-'])([a-z])/g, (m, p, c) => p + c.toUpperCase());
+    })
+    .join(" ");
+}
+
+function trimLocationTokens(s) {
+  let tokens = s.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return tokens.join(" ");
+  const last = tokens[tokens.length - 1].toUpperCase().replace(/[^A-Z]/g, "");
+  if (!STATE_SET.has(last)) return tokens.join(" ");
+  tokens = tokens.slice(0, -1); // drop the state code
+  let drops = 0;
+  while (drops < 2 && tokens.length > 1) { tokens.pop(); drops++; }
+  return tokens.join(" ");
+}
+
+function scrubName(raw, opts) {
+  let s = " " + raw.replace(/\s+/g, " ").trim() + " ";
+  let changed = true, guard = 0;
+  while (changed && guard++ < 8) {
+    changed = false;
+    for (const re of PREFIX_SCRUB) {
+      const next = s.trimStart().replace(re, "");
+      if (next !== s.trimStart()) { s = " " + next; changed = true; }
+    }
+  }
+  for (const re of INLINE_SCRUB) s = s.replace(re, " ");
+  s = s.replace(/[|;]+/g, " ").replace(/\s+/g, " ").trim();
+  s = s.replace(/^[-*#.,\s]+|[-*#.,\s]+$/g, "");
+  if (opts.trimLocation) s = trimLocationTokens(s);
+  s = s.replace(/\s+/g, " ").trim();
+  if (!s) return raw.trim();
+  return opts.titleCase ? titleCase(s) : s.toUpperCase();
+}
+
+/* ============================================================================
+ * 5. RULE ENGINE
+ * ==========================================================================*/
+function ruleMatches(rule, raw, clean) {
+  if (!rule.match) return false;
+  const hay = [raw, clean];
+  try {
+    if (rule.type === "regex") {
+      const re = new RegExp(rule.match, "i");
+      return hay.some((h) => re.test(h));
+    }
+    const m = rule.match.toLowerCase();
+    return hay.some((h) => {
+      const t = h.toLowerCase();
+      if (rule.type === "exact") return t === m;
+      if (rule.type === "starts") return t.startsWith(m);
+      return t.includes(m);
+    });
+  } catch {
+    return false;
+  }
+}
+
+function enrich(txn, rules, opts, overrides, catMap) {
+  const raw = txn.rawDesc || "";
+  let name = null;
+  let category = null;
+  let source = "auto";
+
+  // Your rules run first.
+  for (const r of rules) {
+    if (r.enabled === false) continue;
+    if (ruleMatches(r, raw, raw)) {
+      if (r.rename) name = r.rename;
+      if (r.category) { category = r.category; source = "rule"; }
+      break;
+    }
+  }
+
+  // Built-in aliases, then scrubbing.
+  if (!name) {
+    for (const [re, canonical] of ALIASES) {
+      if (re.test(raw)) { name = canonical; break; }
+    }
+  }
+  if (!name) name = scrubName(raw, opts);
+
+  if (!category) {
+    for (const [re, cat] of CATEGORY_RULES) {
+      if (re.test(raw) || re.test(name)) { category = cat; break; }
+    }
+  }
+  if (!category) {
+    category = txn.amount > 0 ? "Income" : "Uncategorized";
+    source = txn.amount > 0 ? "auto" : "none";
+  }
+
+  const key = overrideKey(txn);
+  if (overrides[key]) { category = overrides[key]; source = "manual"; }
+
+  /* A category the user renamed or deleted still comes out of the built-in
+     rules under its old name, so translate it on the way out. */
+  if (catMap && catMap[category]) category = catMap[category];
+
+  return { ...txn, cleanDesc: name, category, source };
+}
+
+const overrideKey = (t) => `${t.date}|${t.rawAmount ?? t.amount}|${(t.rawDesc || "").slice(0, 60)}`;
+
+/* Per-entry edits (deleting, flipping direction) are scoped to the account, so
+   touching a charge in one account leaves an identical one elsewhere alone. */
+const entryKey = (t) => `${t.sourceId}|${t.date}|${t.rawAmount ?? t.amount}|${(t.rawDesc || "").slice(0, 60)}`;
+
+/* ============================================================================
+ * 6. SPREADSHEET PARSING
+ * ==========================================================================*/
+const HEADER_HINT = /date|desc|amount|debit|credit|payee|memo|balance|transaction|withdraw|deposit|type|reference/i;
+
+function detectHeaderRow(rows) {
+  let best = 0, bestScore = -1;
+  for (let i = 0; i < Math.min(rows.length, 25); i++) {
+    const r = rows[i] || [];
+    const score = r.filter((c) => typeof c === "string" && HEADER_HINT.test(c)).length;
+    if (score > bestScore) { bestScore = score; best = i; }
+  }
+  return bestScore >= 2 ? best : 0;
+}
+
+function pickColumn(headers, patterns) {
+  for (const p of patterns) {
+    const i = headers.findIndex((h) => p.test(String(h || "")));
+    if (i !== -1) return i;
+  }
+  return -1;
+}
+
+function autoMap(headers) {
+  return {
+    date: pickColumn(headers, [/transaction date/i, /post(ed|ing)? date/i, /^date$/i, /date/i]),
+    desc: pickColumn(headers, [/descript/i, /payee/i, /merchant/i, /^name$/i, /details?/i, /memo/i, /transaction/i]),
+    amount: pickColumn(headers, [/^amount$/i, /amount/i, /^amt$/i]),
+    debit: pickColumn(headers, [/debit/i, /withdrawal/i]),
+    credit: pickColumn(headers, [/credit/i, /deposit/i]),
+  };
+}
+
+function parseAmount(v) {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return v;
+  let s = String(v).trim().replace(/[$\s,]/g, "");
+  let neg = false;
+  if (/^\(.*\)$/.test(s)) { neg = true; s = s.slice(1, -1); }
+  if (s.startsWith("-")) { neg = true; s = s.slice(1); }
+  if (s.endsWith("-")) { neg = true; s = s.slice(0, -1); }
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  return neg ? -n : n;
+}
+
+function parseDate(v) {
+  if (!v && v !== 0) return "";
+  if (v instanceof Date && !isNaN(v)) return toISO(v);
+  if (typeof v === "number" && v > 20000 && v < 60000) {
+    return toISO(new Date(Math.round((v - 25569) * 86400000)));
+  }
+  const s = String(v).trim();
+  let m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    let [, a, b, y] = m;
+    if (y.length === 2) y = String(2000 + parseInt(y, 10));
+    return `${y}-${String(a).padStart(2, "0")}-${String(b).padStart(2, "0")}`;
+  }
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(s);
+  return isNaN(d) ? "" : toISO(d);
+}
+
+function toISO(d) {
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+/* One statement file, read through its own column mapping.
+   Sign flipping is an account-level setting so every statement agrees. */
+function fileTransactions(file, account) {
+  const { rows, headerRow, mapping } = file;
+  const out = [];
+  for (let i = headerRow + 1; i < rows.length; i++) {
+    const r = rows[i] || [];
+    if (!r.length) continue;
+    const rawDesc = mapping.desc >= 0 ? String(r[mapping.desc] ?? "").trim() : "";
+    if (!rawDesc) continue;
+
+    let amount = null;
+    if (mapping.amount >= 0) amount = parseAmount(r[mapping.amount]);
+    if (amount === null && (mapping.debit >= 0 || mapping.credit >= 0)) {
+      const d = mapping.debit >= 0 ? parseAmount(r[mapping.debit]) : null;
+      const c = mapping.credit >= 0 ? parseAmount(r[mapping.credit]) : null;
+      if (d !== null || c !== null) amount = (c || 0) - Math.abs(d || 0);
+    }
+    if (amount === null) continue;
+    if (account.flip) amount = -amount;
+
+    const date = mapping.date >= 0 ? parseDate(r[mapping.date]) : "";
+    out.push({ id: `${account.id}:${file.fid}:${i}`, sourceId: account.id, fileId: file.fid, date, rawDesc, amount, rawAmount: amount });
+  }
+  return out;
+}
+
+/* Every statement filed under one account, combined. */
+function accountTransactions(account) {
+  return (account.files || []).flatMap((f) => fileTransactions(f, account));
+}
+
+const sameHeaders = (a, b) =>
+  !!a && !!b && a.length === b.length && a.every((h, i) => h === b[i]);
+
+/* ============================================================================
+ * 6b. PDF STATEMENTS
+ *   PDFs carry no table structure, only positioned text. We rebuild lines by
+ *   y-position, then read each line as: date, description, and whatever
+ *   numbers trail it. Those numbers become separate columns so the existing
+ *   column mapping can sort out which is the amount and which is a balance.
+ * ==========================================================================*/
+const PDFJS_VERSION = "3.11.174";
+let pdfLibPromise = null;
+
+function loadPdfJs() {
+  if (typeof window === "undefined") return Promise.reject(new Error("no window"));
+  if (window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (pdfLibPromise) return pdfLibPromise;
+  pdfLibPromise = new Promise((resolve, reject) => {
+    const base = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}`;
+    const tag = document.createElement("script");
+    tag.src = `${base}/pdf.min.js`;
+    tag.onload = () => {
+      if (!window.pdfjsLib) return reject(new Error("pdf.js unavailable"));
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc = `${base}/pdf.worker.min.js`;
+      resolve(window.pdfjsLib);
+    };
+    tag.onerror = () => reject(new Error("pdf.js unavailable"));
+    document.head.appendChild(tag);
+  });
+  return pdfLibPromise;
+}
+
+/* Text items sharing a y-coordinate are one visual line. */
+async function pdfToLines(buffer) {
+  const pdfjsLib = await loadPdfJs();
+  const doc = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const lines = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const content = await page.getTextContent();
+    const rows = new Map();
+    for (const item of content.items) {
+      if (!item.str || !item.str.trim()) continue;
+      const y = Math.round(item.transform[5] / 2.5) * 2.5;
+      if (!rows.has(y)) rows.set(y, []);
+      rows.get(y).push({ x: item.transform[4], str: item.str });
+    }
+    for (const y of [...rows.keys()].sort((a, b) => b - a)) {
+      const text = rows.get(y).sort((a, b) => a.x - b.x).map((i) => i.str).join(" ").replace(/\s+/g, " ").trim();
+      if (text) lines.push(text);
+    }
+  }
+  return lines;
+}
+
+const AMOUNT_TOKEN = /\(?-?\$?\s?\d{1,3}(?:,\d{3})*\.\d{2}\)?-?/g;
+const DATE_SLASH = /^(\d{1,2}\/\d{1,2}(?:\/\d{2,4})?)\s+/;
+const DATE_MONTH = /^((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:,?\s+\d{4})?)\s+/i;
+
+/* Statements often print MM/DD with the year only in the header. */
+function dominantYear(lines) {
+  const tally = {};
+  for (const l of lines) {
+    for (const y of l.match(/\b(19|20)\d{2}\b/g) || []) tally[y] = (tally[y] || 0) + 1;
+  }
+  const best = Object.entries(tally).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : "";
+}
+
+function linesToRows(lines) {
+  const year = dominantYear(lines);
+  const rows = [];
+  let widest = 0;
+  for (const line of lines) {
+    const m = line.match(DATE_SLASH) || line.match(DATE_MONTH);
+    if (!m) continue;
+    let date = m[1].trim();
+    if (year && /^\d{1,2}\/\d{1,2}$/.test(date)) date = `${date}/${year}`;
+
+    const rest = line.slice(m[0].length);
+    const amounts = rest.match(AMOUNT_TOKEN);
+    if (!amounts || !amounts.length) continue;
+
+    const desc = rest.slice(0, rest.indexOf(amounts[0])).trim().replace(/[\s.]+$/, "");
+    if (!desc) continue;
+
+    const nums = amounts.slice(0, 3);
+    widest = Math.max(widest, nums.length);
+    rows.push([date, desc, ...nums]);
+  }
+  if (!rows.length) return [];
+  const header = ["Date", "Description"];
+  for (let i = 0; i < widest; i++) header.push(i === 0 ? "Amount" : `Number ${i + 1}`);
+  return [header, ...rows.map((r) => { const c = [...r]; while (c.length < header.length) c.push(""); return c; })];
+}
+
+/* ============================================================================
+ * 7. SMALL PRESENTATION HELPERS
+ * ==========================================================================*/
+const money = (n) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+
+const shortDate = (iso) => (iso ? `${iso.slice(5, 7)}/${iso.slice(8, 10)}/${iso.slice(2, 4)}` : "—");
+
+const CHIPS = [
+  "bg-rose-100 text-rose-900", "bg-amber-100 text-amber-900", "bg-lime-100 text-lime-900",
+  "bg-emerald-100 text-emerald-900", "bg-indigo-100 text-indigo-900", "bg-sky-100 text-sky-900",
+  "bg-indigo-100 text-indigo-900", "bg-violet-100 text-violet-900",
+  "bg-fuchsia-100 text-fuchsia-900", "bg-orange-100 text-orange-900",
+];
+function chipFor(cat) {
+  if (cat === "Uncategorized") return "bg-amber-200 text-amber-900";
+  if (cat === "Income") return "bg-emerald-100 text-emerald-900";
+  if (cat === "Transfers") return "bg-slate-200 text-slate-700";
+  let h = 0;
+  for (let i = 0; i < cat.length; i++) h = (h * 31 + cat.charCodeAt(i)) >>> 0;
+  return CHIPS[h % CHIPS.length];
+}
+
+const STORE_KEY = "ledger-cleaner:config-v1";
+
+const monthKey = (iso) => (iso ? iso.slice(0, 7) : "");
+const monthLabel = (k) => {
+  const [y, m] = k.split("-");
+  return new Date(Date.UTC(+y, +m - 1, 1)).toLocaleDateString("en-US", {
+    month: "short", year: "2-digit", timeZone: "UTC",
+  });
+};
+const longDate = (iso) =>
+  iso
+    ? new Date(iso + "T00:00:00Z").toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric", timeZone: "UTC",
+      })
+    : "no date";
+
+/* ============================================================================
+ * 8. ANALYTICS — one pass over a set of transactions.
+ *    Transfers are excluded from spending figures so paying off a card
+ *    doesn't get counted as spending twice.
+ * ==========================================================================*/
+function summarize(txns) {
+  let inflow = 0, outflow = 0, review = 0, dated = 0;
+  let first = "", last = "", largest = null;
+  const cats = {}, merch = {}, months = {};
+
+  for (const t of txns) {
+    if (t.date) {
+      dated++;
+      if (!first || t.date < first) first = t.date;
+      if (!last || t.date > last) last = t.date;
+    }
+    if (t.category === "Uncategorized") review++;
+    if (t.category === "Transfers") continue;
+
+    const mk = monthKey(t.date);
+    if (mk && !months[mk]) months[mk] = { in: 0, out: 0 };
+
+    if (t.amount > 0) {
+      inflow += t.amount;
+      if (mk) months[mk].in += t.amount;
+    } else {
+      const a = Math.abs(t.amount);
+      outflow += a;
+      if (mk) months[mk].out += a;
+      cats[t.category] = (cats[t.category] || 0) + a;
+      const m = merch[t.cleanDesc] || (merch[t.cleanDesc] = { total: 0, count: 0, last: "", months: new Set() });
+      m.total += a;
+      m.count += 1;
+      if (t.date > m.last) m.last = t.date;
+      if (mk) m.months.add(mk);
+      if (!largest || a > Math.abs(largest.amount)) largest = t;
+    }
+  }
+
+  const merchants = Object.entries(merch).sort((a, b) => b[1].total - a[1].total);
+  const recurring = merchants
+    .filter(([, m]) => m.months.size >= 3 && m.count >= 3)
+    .map(([name, m]) => ({ name, ...m, monthly: m.total / m.months.size }))
+    .sort((a, b) => b.monthly - a.monthly);
+
+  return {
+    count: txns.length,
+    dated,
+    inflow,
+    outflow,
+    net: inflow - outflow,
+    first,
+    last,
+    review,
+    largest,
+    months,
+    monthList: Object.keys(months).sort(),
+    cats: Object.entries(cats).sort((a, b) => b[1] - a[1]),
+    merchants,
+    recurring,
+  };
+}
+
+/* ============================================================================
+ * 9. DASHBOARD
+ * ==========================================================================*/
+const PERIODS = [
+  ["all", "All time"],
+  ["30", "30 days"],
+  ["90", "90 days"],
+  ["365", "12 months"],
+];
+
+const INK = "#5b5bd6";
+const INK_SOFT = "#c5c7ee";
+const GOOD = "#22c55e";
+const BAD = "#ef4444";
+const RING = ["#4f46e5", "#93c5fd", "#c4b5fd", "#5eead4", "#a5b4fc", "#818cf8", "#cbd5e1"];
+const BADGE = ["bg-indigo-100 text-indigo-700", "bg-emerald-100 text-emerald-700", "bg-sky-100 text-sky-700", "bg-violet-100 text-violet-700", "bg-amber-100 text-amber-700", "bg-rose-100 text-rose-700"];
+
+const compact = (n) => {
+  const a = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  if (a >= 1e6) return `${sign}$${(a / 1e6).toFixed(2)}M`;
+  if (a >= 1e3) return `${sign}$${(a / 1e3).toFixed(1)}K`;
+  return `${sign}$${Math.round(a)}`;
+};
+
+/* Build a gap-free month series with a running balance. */
+function buildMonthly(txns, openingTotal) {
+  const map = {};
+  for (const t of txns) {
+    if (t.category === "Transfers") continue;
+    const k = monthKey(t.date);
+    if (!k) continue;
+    if (!map[k]) map[k] = { income: 0, expense: 0 };
+    if (t.amount > 0) map[k].income += t.amount;
+    else map[k].expense += Math.abs(t.amount);
+  }
+  const keys = Object.keys(map).sort();
+  if (!keys.length) return [];
+  let [y, m] = keys[0].split("-").map(Number);
+  const [ey, em] = keys[keys.length - 1].split("-").map(Number);
+  const out = [];
+  let bal = openingTotal;
+  let guard = 0;
+  while ((y < ey || (y === ey && m <= em)) && guard++ < 120) {
+    const k = `${y}-${String(m).padStart(2, "0")}`;
+    const e = map[k] || { income: 0, expense: 0 };
+    const net = e.income - e.expense;
+    bal += net;
+    out.push({ key: k, label: monthLabel(k), income: e.income, expense: e.expense, net, balance: bal });
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return out.slice(-24);
+}
+
+/* ---- reusable card shell ---- */
+function Card({ title, action, className = "", bodyClass = "p-4", children }) {
+  return (
+    <div className={`bg-white rounded-xl shadow-sm border border-slate-200 ${className}`}>
+      {title && (
+        <div className="px-4 pt-3.5 pb-1 flex items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold text-slate-800">{title}</h2>
+          {action}
+        </div>
+      )}
+      <div className={bodyClass}>{children}</div>
+    </div>
+  );
+}
+
+/* ---- KPI sparkline ---- */
+function KpiSpark({ data, mode }) {
+  if (data.length < 2) return null;
+  const maxChg = Math.max(1, ...data.map((d) => Math.abs(d.chg)));
+  return (
+    <ResponsiveContainer width="100%" height={56}>
+      <ComposedChart data={data} margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
+        <YAxis yAxisId="v" hide domain={["dataMin", "dataMax"]} />
+        <YAxis yAxisId="c" hide domain={[0, maxChg * (mode === "grow" ? 1.05 : 4)]} />
+        <Tooltip
+          cursor={false}
+          contentStyle={{ fontSize: 11, borderRadius: 6, border: "1px solid #e2e8f0", padding: "4px 8px" }}
+          labelFormatter={(l) => l}
+          formatter={(v, n) => (n === "v" ? [money(v), "Total"] : null)}
+        />
+        {mode === "grow" ? (
+          <Bar yAxisId="c" dataKey="chg" radius={[2, 2, 0, 0]} maxBarSize={9}>
+            {data.map((d, i) => <Cell key={i} fill={d.chg >= 0 ? GOOD : BAD} />)}
+          </Bar>
+        ) : (
+          <Bar yAxisId="c" dataKey="chgAbs" radius={[1, 1, 0, 0]} maxBarSize={7}>
+            {data.map((d, i) => <Cell key={i} fill={d.chg >= 0 ? GOOD : BAD} />)}
+          </Bar>
+        )}
+        <Line yAxisId="v" type="monotone" dataKey="v" stroke={INK} strokeWidth={1.75} dot={false} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+function KpiCard({ label, value, delta, positiveIsGood = true, tint, icon, spark }) {
+  const up = delta !== null && delta >= 0;
+  const good = positiveIsGood ? up : !up;
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3.5 flex items-center gap-4">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-slate-700 whitespace-nowrap">{label}</span>
+          <span className={`w-6 h-6 rounded-md grid place-items-center shrink-0 ${tint}`}>{icon}</span>
+        </div>
+        <p className="mt-1 text-3xl font-bold tracking-tight text-slate-900 tabular-nums">{value}</p>
+        <p className={`mt-1 text-xs font-medium tabular-nums ${delta === null ? "text-slate-400" : good ? "text-emerald-600" : "text-rose-600"}`}>
+          {delta === null ? "no prior month" : `${up ? "+" : ""}${delta.toFixed(1)}% ${up ? "▲" : "▼"} vs last month`}
+        </p>
+      </div>
+      <div className="flex-1 min-w-0 hidden sm:block">{spark}</div>
+    </div>
+  );
+}
+
+function DashboardView({ sources, transactions, openings, onOpening, onJump }) {
+  const [period, setPeriod] = useState("all");
+
+  const latest = useMemo(
+    () => transactions.reduce((m, t) => (t.date && t.date > m ? t.date : m), ""),
+    [transactions]
+  );
+
+  const scoped = useMemo(() => {
+    if (period === "all" || !latest) return transactions;
+    const d = new Date(latest + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() - Number(period));
+    const cutoff = toISO(d);
+    return transactions.filter((t) => t.date && t.date >= cutoff);
+  }, [transactions, period, latest]);
+
+  const all = useMemo(() => summarize(scoped), [scoped]);
+
+  const perAccount = useMemo(
+    () => sources.map((s) => ({ source: s, stats: summarize(scoped.filter((t) => t.sourceId === s.id)) })),
+    [sources, scoped]
+  );
+
+  /* account summary rows, opening balance is user-supplied */
+  const rows = useMemo(
+    () =>
+      perAccount.map(({ source, stats }) => {
+        const opening = parseAmount(openings[source.name]) || 0;
+        return {
+          id: source.id,
+          name: source.name,
+          opening,
+          income: stats.inflow,
+          expense: stats.outflow,
+          current: opening + stats.inflow - stats.outflow,
+          review: stats.review,
+        };
+      }),
+    [perAccount, openings]
+  );
+
+  const totals = useMemo(
+    () =>
+      rows.reduce(
+        (a, r) => ({
+          opening: a.opening + r.opening,
+          income: a.income + r.income,
+          expense: a.expense + r.expense,
+          current: a.current + r.current,
+        }),
+        { opening: 0, income: 0, expense: 0, current: 0 }
+      ),
+    [rows]
+  );
+
+  const monthly = useMemo(() => buildMonthly(scoped, totals.opening), [scoped, totals.opening]);
+
+  const pct = (a, b) => (b ? ((a - b) / Math.abs(b)) * 100 : null);
+  const lastM = monthly[monthly.length - 1];
+  const prevM = monthly[monthly.length - 2];
+
+  const sparks = useMemo(() => {
+    const mk = (get) =>
+      monthly.map((d, i) => {
+        const v = get(d);
+        const chg = i === 0 ? 0 : v - get(monthly[i - 1]);
+        return { label: d.label, v, chg, chgAbs: Math.abs(chg) };
+      });
+    return { balance: mk((d) => d.balance), expense: mk((d) => d.expense), income: mk((d) => d.income) };
+  }, [monthly]);
+
+  /* waterfall: monthly change in balance, running from zero, plus a total bar */
+  const waterfall = useMemo(() => {
+    let run = 0;
+    const bars = monthly.map((d) => {
+      const start = run;
+      run += d.net;
+      return {
+        label: d.label,
+        base: Math.min(start, run),
+        delta: Math.abs(d.net),
+        net: d.net,
+        kind: d.net >= 0 ? "up" : "down",
+      };
+    });
+    if (bars.length) bars.push({ label: "Total", base: Math.min(0, run), delta: Math.abs(run), net: run, kind: "total" });
+    return bars;
+  }, [monthly]);
+
+  const avgBalance = monthly.length ? monthly.reduce((s, d) => s + d.balance, 0) / monthly.length : 0;
+
+  const categorySlices = useMemo(() => {
+    const top = all.cats.slice(0, 6);
+    const rest = all.cats.slice(6).reduce((s, c) => s + c[1], 0);
+    const list = top.map(([name, value], i) => ({ name, value, fill: RING[i % RING.length] }));
+    if (rest > 0) list.push({ name: "Others", value: rest, fill: RING[6] });
+    return list.sort((a, b) => b.value - a.value);
+  }, [all.cats]);
+
+  const flags = useMemo(() => {
+    const out = [];
+    for (const { source, stats } of perAccount) {
+      if (!(source.files || []).length) {
+        out.push({ label: source.name, text: "No statements added yet.", account: source.id });
+        continue;
+      }
+      if (source.files.every((f) => f.mapping.date < 0))
+        out.push({ label: source.name, text: "No date column mapped, so this account is missing from every trend.", account: source.id });
+      else if (stats.count > 3 && stats.dated === 0)
+        out.push({ label: source.name, text: "Dates aren't parsing. Check the date column in the account panel.", account: source.id });
+      if (stats.count > 5 && stats.outflow === 0 && stats.inflow > 0)
+        out.push({ label: source.name, text: 'Every amount is positive. Turn on "Flip the sign" for this account.', account: source.id });
+      if (stats.count > 5 && stats.inflow === 0 && stats.outflow > 0)
+        out.push({ label: source.name, text: "No deposits found. Check the sign or the debit/credit columns.", account: source.id });
+    }
+    if (all.review) out.push({ label: "Categories", text: `${all.review} transactions still need one.`, review: true });
+    return out;
+  }, [perAccount, all.review]);
+
+  const axisFmt = (v) => compact(v);
+  const tipStyle = { fontSize: 12, borderRadius: 6, border: "1px solid #e2e8f0" };
+
+  if (!sources.length) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-5 py-20 text-center">
+        <Wallet size={26} className="mx-auto text-slate-300" />
+        <p className="mt-3 text-slate-700 font-medium">No accounts yet</p>
+        <p className="mt-1 text-sm text-slate-500">Add a bank export and this fills in with balances, trends, and recurring charges.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* toolbar */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex rounded-lg border border-slate-300 overflow-hidden bg-white">
+          {PERIODS.map(([k, label]) => (
+            <button
+              key={k}
+              onClick={() => setPeriod(k)}
+              className={`px-2.5 py-1.5 text-xs ${period === k ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-50"}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs font-mono text-slate-500 flex items-center gap-1.5">
+          <Calendar size={12} />
+          {longDate(all.first)} → {longDate(all.last)}
+        </p>
+      </div>
+
+      {flags.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-amber-300">
+          <div className="px-4 pt-3 pb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-amber-700">
+            <AlertTriangle size={13} /> Worth a look
+          </div>
+          <ul className="divide-y divide-slate-100">
+            {flags.map((f, i) => (
+              <li key={i}>
+                <button onClick={() => onJump({ account: f.account, review: f.review, settings: !!f.account })} className="w-full text-left px-4 py-2 text-sm hover:bg-amber-50 flex gap-2">
+                  <span className="font-medium text-slate-900 shrink-0">{f.label}</span>
+                  <span className="text-slate-600">{f.text}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* KPI row */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <KpiCard
+          label="Total Balance"
+          value={compact(totals.current)}
+          delta={lastM && prevM ? pct(lastM.balance, prevM.balance) : null}
+          tint="bg-indigo-100 text-indigo-600"
+          icon={<Wallet size={13} />}
+          spark={<KpiSpark data={sparks.balance} mode="grow" />}
+        />
+        <KpiCard
+          label="Total Expense"
+          value={compact(totals.expense)}
+          delta={lastM && prevM ? pct(lastM.expense, prevM.expense) : null}
+          positiveIsGood={false}
+          tint="bg-rose-100 text-rose-600"
+          icon={<ArrowDownRight size={13} />}
+          spark={<KpiSpark data={sparks.expense} mode="flow" />}
+        />
+        <KpiCard
+          label="Total Income"
+          value={compact(totals.income)}
+          delta={lastM && prevM ? pct(lastM.income, prevM.income) : null}
+          tint="bg-emerald-100 text-emerald-600"
+          icon={<ArrowUpRight size={13} />}
+          spark={<KpiSpark data={sparks.income} mode="flow" />}
+        />
+      </div>
+
+      {/* chart grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        {/* income vs expense */}
+        <Card title="Income vs Expense" className="lg:col-span-5" bodyClass="px-2 pb-3 pt-2">
+          <ResponsiveContainer width="100%" height={196}>
+            <AreaChart data={monthly} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gIncome" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor={INK} stopOpacity={0.22} />
+                  <stop offset="100%" stopColor={INK} stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={46} tickFormatter={axisFmt} />
+              <Tooltip contentStyle={tipStyle} formatter={(v, n) => [money(v), n]} />
+              <Area type="monotone" dataKey="expense" name="Expense" stroke={INK_SOFT} strokeWidth={2} fill="none" dot={false} />
+              <Area type="monotone" dataKey="income" name="Income" stroke={INK} strokeWidth={2} fill="url(#gIncome)" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+          <div className="flex justify-center gap-4 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 inline-block" style={{ background: INK }} /> Income</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 inline-block" style={{ background: INK_SOFT }} /> Expense</span>
+          </div>
+        </Card>
+
+        {/* balance trend */}
+        <Card title="Account Balance Trend" className="lg:col-span-4" bodyClass="px-2 pb-3 pt-2">
+          <ResponsiveContainer width="100%" height={214}>
+            <BarChart data={monthly} margin={{ top: 8, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="#f1f5f9" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={46} tickFormatter={axisFmt} />
+              <Tooltip contentStyle={tipStyle} formatter={(v) => [money(v), "Balance"]} />
+              <ReferenceLine
+                y={avgBalance}
+                stroke="#94a3b8"
+                strokeDasharray="4 4"
+                label={{ value: `Average: ${compact(avgBalance)}`, position: "insideTopRight", fontSize: 10, fill: "#64748b" }}
+              />
+              <Bar dataKey="balance" fill={INK} radius={[3, 3, 0, 0]} maxBarSize={22} />
+            </BarChart>
+          </ResponsiveContainer>
+        </Card>
+
+        {/* expense by category — tall card on the right */}
+        <Card title="Expense by Category" className="lg:col-span-3 lg:row-span-2" bodyClass="p-3">
+          {categorySlices.length ? (
+            <div className="flex flex-col h-full">
+              <ul className="space-y-1 mb-1">
+                {categorySlices.map((c) => (
+                  <li key={c.name}>
+                    <button onClick={() => onJump({ category: c.name === "Others" ? undefined : c.name })} className="w-full flex items-center gap-2 text-xs hover:bg-slate-50 rounded px-1 py-0.5">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: c.fill }} />
+                      <span className="font-mono tabular-nums text-slate-700">{compact(c.value)}</span>
+                      <span className="text-slate-400">|</span>
+                      <span className="text-slate-600 truncate">{c.name}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <ResponsiveContainer width="100%" height={300}>
+                <RadialBarChart
+                  data={categorySlices}
+                  innerRadius="28%"
+                  outerRadius="100%"
+                  startAngle={90}
+                  endAngle={-270}
+                  barSize={13}
+                >
+                  <PolarAngleAxis type="number" domain={[0, categorySlices[0].value]} tick={false} />
+                  <RadialBar background={{ fill: "#f1f5f9" }} dataKey="value" cornerRadius={7} />
+                  <Tooltip contentStyle={tipStyle} formatter={(v, n, p) => [money(v), p?.payload?.name]} />
+                </RadialBarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 py-8 text-center">No spending in this period.</p>
+          )}
+        </Card>
+
+        {/* waterfall */}
+        <Card title="Changes in Account Balance" className="lg:col-span-5" bodyClass="px-2 pb-3 pt-2">
+          <ResponsiveContainer width="100%" height={196}>
+            <BarChart data={waterfall} margin={{ top: 16, right: 10, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="#f1f5f9" vertical={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} interval={0} />
+              <YAxis tick={{ fontSize: 10, fill: "#94a3b8" }} tickLine={false} axisLine={false} width={46} tickFormatter={axisFmt} />
+              <Tooltip contentStyle={tipStyle} formatter={(v, n, p) => [money(p?.payload?.net ?? v), "Change"]} />
+              <Bar dataKey="base" stackId="w" fill="transparent" />
+              <Bar dataKey="delta" stackId="w" radius={[2, 2, 0, 0]} maxBarSize={26}>
+                {waterfall.map((d, i) => (
+                  <Cell key={i} fill={d.kind === "total" ? INK : d.kind === "up" ? GOOD : BAD} />
+                ))}
+                <LabelList dataKey="net" position="top" fontSize={9} fill="#64748b" formatter={(v) => compact(v)} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+          <div className="flex justify-center gap-4 text-xs text-slate-500">
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: GOOD }} /> Increase</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: BAD }} /> Decrease</span>
+            <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm inline-block" style={{ background: INK }} /> Total</span>
+          </div>
+        </Card>
+
+        {/* account summary */}
+        <Card title="Account Summary" className="lg:col-span-4" bodyClass="pb-2">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-slate-500 border-b border-slate-200">
+                  <th className="text-left font-medium px-4 py-1.5">Account</th>
+                  <th className="text-right font-medium px-2 py-1.5">Opening</th>
+                  <th className="text-right font-medium px-2 py-1.5">Income</th>
+                  <th className="text-right font-medium px-2 py-1.5">Expense</th>
+                  <th className="text-right font-medium px-4 py-1.5">Current</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                    <td className="px-4 py-2">
+                      <button onClick={() => onJump({ account: r.id })} className="flex items-center gap-2 min-w-0 group">
+                        <span className={`w-6 h-6 rounded-md grid place-items-center text-xs font-bold shrink-0 ${BADGE[i % BADGE.length]}`}>
+                          {r.name.trim().charAt(0).toUpperCase() || "?"}
+                        </span>
+                        <span className="truncate group-hover:text-indigo-700">{r.name}</span>
+                      </button>
+                    </td>
+                    <td className="px-2 py-2 text-right">
+                      <input
+                        value={openings[r.name] ?? ""}
+                        onChange={(e) => onOpening(r.name, e.target.value)}
+                        placeholder="$0"
+                        title="Type this account's starting balance"
+                        className="w-20 text-right tabular-nums bg-transparent border-b border-dashed border-slate-300 hover:border-indigo-400 focus:border-indigo-600 focus:outline-none px-1"
+                      />
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums text-emerald-700">{compact(r.income)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums text-rose-600">{compact(r.expense)}</td>
+                    <td className="px-4 py-2 text-right tabular-nums font-medium">{compact(r.current)}</td>
+                  </tr>
+                ))}
+                <tr className="font-semibold bg-slate-50">
+                  <td className="px-4 py-2">Total</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{compact(totals.opening)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{compact(totals.income)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">{compact(totals.expense)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{compact(totals.current)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p className="px-4 pt-2 text-xs text-slate-500">
+            Opening balances are yours to fill in — bank exports don't carry them. Everything else is calculated.
+          </p>
+        </Card>
+      </div>
+
+      {/* merchants + recurring */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        <Card title="Top merchants" className="lg:col-span-5" bodyClass="pb-2">
+          <ul className="divide-y divide-slate-100">
+            {all.merchants.slice(0, 8).map(([name, m]) => (
+              <li key={name}>
+                <button onClick={() => onJump({ search: name })} className="w-full flex items-baseline justify-between gap-2 px-4 py-2 text-sm hover:bg-slate-50 text-left">
+                  <span className="truncate">{name}</span>
+                  <span className="shrink-0 tabular-nums text-slate-700">
+                    {money(m.total)} <span className="text-slate-400 text-xs">×{m.count}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+            {!all.merchants.length && <li className="px-4 py-2 text-xs text-slate-500">Nothing yet.</li>}
+          </ul>
+        </Card>
+
+        <Card
+          title="Looks recurring"
+          className="lg:col-span-7"
+          bodyClass="pb-2"
+          action={
+            all.recurring.length ? (
+              <span className="text-xs text-slate-500 tabular-nums">
+                ≈{money(all.recurring.reduce((s, r) => s + r.monthly, 0))}/mo
+              </span>
+            ) : null
+          }
+        >
+          {all.recurring.length ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-slate-500 border-b border-slate-200">
+                  <th className="text-left font-medium px-4 py-1.5">Merchant</th>
+                  <th className="text-right font-medium px-2 py-1.5">Per month</th>
+                  <th className="text-right font-medium px-2 py-1.5">Charges</th>
+                  <th className="text-right font-medium px-4 py-1.5">Last seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {all.recurring.slice(0, 8).map((r) => (
+                  <tr key={r.name} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onJump({ search: r.name })}>
+                    <td className="px-4 py-2 truncate">{r.name}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{money(r.monthly)}</td>
+                    <td className="px-2 py-2 text-right tabular-nums text-slate-500">{r.count}</td>
+                    <td className="px-4 py-2 text-right text-xs text-slate-500">{shortDate(r.last)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="px-4 py-4 text-xs text-slate-500">
+              Nothing repeats often enough yet. This needs at least three months of history to find patterns.
+            </p>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================================
+ * 10. APP
+ * ==========================================================================*/
+function App() {
+  const [sources, setSources] = useState([]);
+  const [rules, setRules] = useState([]);
+  const [overrides, setOverrides] = useState({});
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [opts, setOpts] = useState({ trimLocation: true, titleCase: true, dedupe: true });
+  const [loaded, setLoaded] = useState(false);
+
+  const [search, setSearch] = useState("");
+  const [filterSource, setFilterSource] = useState("all");
+  const [filterCat, setFilterCat] = useState("all");
+  const [onlyReview, setOnlyReview] = useState(false);
+  const [limit, setLimit] = useState(150);
+  const [view, setView] = useState("dashboard");
+  const [openings, setOpenings] = useState({});
+  const [pendingFiles, setPendingFiles] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [deleted, setDeleted] = useState({});
+  const [directions, setDirections] = useState({});
+  const [catMap, setCatMap] = useState({});
+  const [newCat, setNewCat] = useState("");
+  const [editingCat, setEditingCat] = useState(null);
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [draftRule, setDraftRule] = useState(null);
+  const [expanded, setExpanded] = useState(null);
+  const [expandedFile, setExpandedFile] = useState(null);
+  const [notice, setNotice] = useState("");
+  const fileRef = useRef(null);
+  const uploadTargetRef = useRef(null);
+  const configRef = useRef(null);
+
+  /* ---- persistence ---- */
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await window.storage?.get(STORE_KEY);
+        if (res?.value) {
+          const c = JSON.parse(res.value);
+          if (c.rules) setRules(c.rules);
+          if (c.overrides) setOverrides(c.overrides);
+          if (c.categories) setCategories(c.categories);
+          if (c.opts) setOpts((o) => ({ ...o, ...c.opts }));
+          if (c.openings) setOpenings(c.openings);
+          if (c.accounts) setSources(c.accounts.map((a) => ({ ...a, files: [] })));
+          if (c.deleted) setDeleted(c.deleted);
+          if (c.directions) setDirections(c.directions);
+          if (c.catMap) setCatMap(c.catMap);
+        }
+      } catch { /* first run, nothing saved yet */ }
+      setLoaded(true);
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const t = setTimeout(() => {
+      try {
+        window.storage?.set(STORE_KEY, JSON.stringify({
+          rules, overrides, categories, opts, openings, deleted, directions, catMap,
+          accounts: sources.map(({ id, name, flip, savedHeaders, savedMapping }) => ({ id, name, flip, savedHeaders, savedMapping })),
+        }))?.catch?.(() => {});
+      } catch { /* storage unavailable; session-only */ }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [rules, overrides, categories, opts, openings, deleted, directions, catMap, sources, loaded]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 7000);
+    return () => clearTimeout(t);
+  }, [toast]);
+
+  /* ---- file intake ---- */
+  /* Read one workbook into a statement record. Throws if there's nothing usable. */
+  const parseStatement = async (file) => {
+    if (/\.pdf$/i.test(file.name)) {
+      const lines = await pdfToLines(await file.arrayBuffer());
+      const rows = linesToRows(lines);
+      if (!rows.length) throw new Error("no transactions found");
+      const headers = rows[0].map(String);
+      return {
+        fid: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+        fileName: file.name,
+        sheet: "extracted from PDF",
+        kind: "pdf",
+        rows,
+        headers,
+        headerRow: 0,
+        mapping: { date: 0, desc: 1, amount: 2, debit: -1, credit: -1 },
+      };
+    }
+    let wb;
+    if (/\.(csv|tsv|txt)$/i.test(file.name)) {
+      wb = XLSX.read(await file.text(), { type: "string", cellDates: true });
+    } else {
+      wb = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    }
+    let best = null;
+    for (const nm of wb.SheetNames) {
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[nm], { header: 1, blankrows: false });
+      if (!best || rows.length > best.rows.length) best = { name: nm, rows };
+    }
+    if (!best || best.rows.length < 2) throw new Error("no rows");
+    const headerRow = detectHeaderRow(best.rows);
+    const headers = (best.rows[headerRow] || []).map((h) => String(h ?? ""));
+    return {
+      fid: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      fileName: file.name,
+      sheet: best.name,
+      rows: best.rows,
+      headers,
+      headerRow,
+      mapping: autoMap(headers),
+    };
+  };
+
+  const createAccount = (name) => {
+    const id = `acct-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    setSources((l) => [
+      ...l,
+      { id, name: name || `Account ${l.length + 1}`, flip: false, files: [], savedHeaders: null, savedMapping: null },
+    ]);
+    return id;
+  };
+
+  /* Filing a statement never touches the account's name. If the layout matches
+     something this account has seen before, reuse that mapping. */
+  const attachStatements = (accountId, parsed) =>
+    setSources((list) =>
+      list.map((a) => {
+        if (a.id !== accountId) return a;
+        const files = [...(a.files || [])];
+        let savedH = a.savedHeaders;
+        let savedM = a.savedMapping;
+        for (const f of parsed) {
+          const known =
+            (sameHeaders(savedH, f.headers) && savedM) ||
+            files.find((x) => sameHeaders(x.headers, f.headers))?.mapping;
+          const filed = known ? { ...f, mapping: { ...known } } : f;
+          files.push(filed);
+          if (!savedH) { savedH = filed.headers; savedM = filed.mapping; }
+        }
+        return { ...a, files, savedHeaders: savedH, savedMapping: savedM };
+      })
+    );
+
+  /* Once a statement is trusted, either file it or ask where it goes. */
+  const fileStatements = (parsed, targetId) => {
+    if (targetId) return attachStatements(targetId, parsed);
+    if (!sources.length) {
+      const id = createAccount(parsed[0].fileName.replace(/\.[^.]+$/, ""));
+      return attachStatements(id, parsed);
+    }
+    setPendingFiles(parsed);
+  };
+
+  const handleFiles = async (fileList, targetId) => {
+    const files = Array.from(fileList || []);
+    const parsed = [];
+    for (const file of files) {
+      const isPdf = /\.pdf$/i.test(file.name);
+      try {
+        parsed.push(await parseStatement(file));
+      } catch (err) {
+        if (!isPdf) {
+          setNotice(`Couldn't read ${file.name}. Save it as .xlsx or .csv and try again.`);
+        } else if (String(err.message).includes("unavailable")) {
+          setNotice("The PDF reader couldn't load. Check your connection, or download this statement as CSV instead.");
+        } else {
+          setNotice(`No transactions found in ${file.name}. It may be a scanned image rather than a text PDF — a CSV export will work better.`);
+        }
+      }
+    }
+    if (!parsed.length) return;
+    setNotice("");
+    /* PDF parsing is a guess, so show what came out before it counts. */
+    if (parsed.some((f) => f.kind === "pdf")) return setPreview({ parsed, targetId });
+    fileStatements(parsed, targetId);
+  };
+
+  const pickFilesFor = (accountId) => {
+    uploadTargetRef.current = accountId || null;
+    fileRef.current?.click();
+  };
+
+  const removeStatement = (aid, fid) =>
+    setSources((l) => l.map((a) => (a.id === aid ? { ...a, files: a.files.filter((f) => f.fid !== fid) } : a)));
+
+  /* A mapping fix applies to every statement in the account sharing that layout,
+     and is remembered for the next upload. */
+  const updateFileMapping = (aid, fid, field, val) =>
+    setSources((l) =>
+      l.map((a) => {
+        if (a.id !== aid) return a;
+        const target = a.files.find((f) => f.fid === fid);
+        if (!target) return a;
+        const mapping = { ...target.mapping, [field]: val };
+        return {
+          ...a,
+          files: a.files.map((f) => (sameHeaders(f.headers, target.headers) ? { ...f, mapping } : f)),
+          savedHeaders: target.headers,
+          savedMapping: mapping,
+        };
+      })
+    );
+
+  const updateSource = (id, patch) =>
+    setSources((s) => s.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+
+  /* ---- derived transactions ---- */
+  const transactions = useMemo(() => {
+    let all = sources.flatMap(accountTransactions);
+    if (opts.dedupe) {
+      const seen = new Set();
+      all = all.filter((t) => {
+        const k = `${t.sourceId}|${t.date}|${t.amount}|${t.rawDesc}`;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    }
+    return all
+      .map((t) => {
+        const d = directions[entryKey(t)];
+        if (!d) return t;
+        return { ...t, amount: d === "out" ? -Math.abs(t.rawAmount) : Math.abs(t.rawAmount), flow: d };
+      })
+      .map((t) => enrich(t, rules, opts, overrides, catMap))
+      .map((t) => (deleted[entryKey(t)] ? { ...t, deleted: true } : t))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [sources, rules, opts, overrides, deleted, directions, catMap]);
+
+  /* Deleted entries stay out of every total, chart, and export. */
+  const live = useMemo(() => transactions.filter((t) => !t.deleted), [transactions]);
+  const deletedCount = useMemo(() => transactions.filter((t) => t.deleted).length, [transactions]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const pool = showDeleted ? transactions.filter((t) => t.deleted) : live;
+    return pool.filter((t) => {
+      if (filterSource !== "all" && t.sourceId !== filterSource) return false;
+      if (filterCat !== "all" && t.category !== filterCat) return false;
+      if (onlyReview && t.category !== "Uncategorized") return false;
+      if (q && !(t.cleanDesc.toLowerCase().includes(q) || t.rawDesc.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview]);
+
+  const stats = useMemo(() => {
+    let inflow = 0, outflow = 0;
+    const byCat = {};
+    for (const t of visible) {
+      if (t.category === "Transfers") continue;
+      if (t.amount > 0) inflow += t.amount; else outflow += Math.abs(t.amount);
+      if (t.amount < 0) byCat[t.category] = (byCat[t.category] || 0) + Math.abs(t.amount);
+    }
+    const review = transactions.filter((t) => t.category === "Uncategorized").length;
+    return {
+      inflow, outflow, review,
+      byCat: Object.entries(byCat).sort((a, b) => b[1] - a[1]),
+    };
+  }, [visible, transactions]);
+
+  /* ---- actions ---- */
+  const jumpToLedger = ({ account, category, review, search: q, settings } = {}) => {
+    if (settings) {
+      setExpanded(account || null);
+      setView("settings");
+      return;
+    }
+    setFilterSource(account || "all");
+    setFilterCat(category || "all");
+    setOnlyReview(!!review);
+    setSearch(q || "");
+    setLimit(150);
+    setView("ledger");
+  };
+
+  const deleteEntry = (t) => {
+    const k = entryKey(t);
+    setDeleted((d) => ({ ...d, [k]: 1 }));
+    setToast({
+      text: `Removed ${t.cleanDesc}`,
+      undo: () => setDeleted((d) => { const n = { ...d }; delete n[k]; return n; }),
+    });
+  };
+
+  /* Force a single entry to count as money in or money out. */
+  const setFlow = (t, dir) =>
+    setDirections((d) => {
+      const n = { ...d };
+      if (dir) n[entryKey(t)] = dir;
+      else delete n[entryKey(t)];
+      return n;
+    });
+
+  const flipFlow = (t) => setFlow(t, t.amount < 0 ? "in" : "out");
+
+  const restoreEntry = (t) =>
+    setDeleted((d) => { const n = { ...d }; delete n[entryKey(t)]; return n; });
+
+  const setCategory = (txn, cat) =>
+    setOverrides((o) => ({ ...o, [overrideKey(txn)]: cat }));
+
+  const clearOverride = (txn) =>
+    setOverrides((o) => { const n = { ...o }; delete n[overrideKey(txn)]; return n; });
+
+  /* ---- categories ---- */
+  const catCounts = useMemo(() => {
+    const m = {};
+    for (const t of live) m[t.category] = (m[t.category] || 0) + 1;
+    return m;
+  }, [live]);
+
+  const addCategory = (raw) => {
+    const name = raw.trim();
+    if (!name || categories.includes(name)) return;
+    setCategories((l) => {
+      const i = l.indexOf("Uncategorized");
+      return i === -1 ? [...l, name] : [...l.slice(0, i), name, ...l.slice(i)];
+    });
+    setNewCat("");
+  };
+
+  /* Renaming onto an existing name merges the two. */
+  const renameCategory = (orig, raw) => {
+    const name = raw.trim();
+    setEditingCat(null);
+    if (!name || name === orig || SYSTEM_CATEGORIES.has(orig)) return;
+    setCategories((l) => {
+      const next = l.map((c) => (c === orig ? name : c));
+      return next.filter((c, i) => next.indexOf(c) === i);
+    });
+    setCatMap((m) => {
+      const n = {};
+      for (const [k, v] of Object.entries(m)) n[k] = v === orig ? name : v;
+      n[orig] = name;
+      return n;
+    });
+    setRules((rs) => rs.map((r) => (r.category === orig ? { ...r, category: name } : r)));
+    setOverrides((o) => {
+      const n = {};
+      for (const [k, v] of Object.entries(o)) n[k] = v === orig ? name : v;
+      return n;
+    });
+  };
+
+  const deleteCategory = (cat) => {
+    if (SYSTEM_CATEGORIES.has(cat)) return;
+    const affected = catCounts[cat] || 0;
+    setCategories((l) => l.filter((c) => c !== cat));
+    setCatMap((m) => {
+      const n = {};
+      for (const [k, v] of Object.entries(m)) n[k] = v === cat ? "Uncategorized" : v;
+      n[cat] = "Uncategorized";
+      return n;
+    });
+    setRules((rs) => rs.map((r) => (r.category === cat ? { ...r, category: "" } : r)));
+    setOverrides((o) => {
+      const n = {};
+      for (const [k, v] of Object.entries(o)) if (v !== cat) n[k] = v;
+      return n;
+    });
+    if (filterCat === cat) setFilterCat("all");
+    setToast({ text: affected ? `Deleted ${cat}. ${affected} transactions moved to Uncategorized.` : `Deleted ${cat}.` });
+  };
+
+  const resetCategories = () => {
+    setCategories(DEFAULT_CATEGORIES);
+    setCatMap({});
+    setToast({ text: "Categories reset to the built-in list." });
+  };
+
+  const addRule = (rule) => setRules((r) => [{ id: `r-${Date.now()}`, enabled: true, ...rule }, ...r]);
+  const removeRule = (id) => setRules((r) => r.filter((x) => x.id !== id));
+  const moveRule = (id, dir) =>
+    setRules((r) => {
+      const i = r.findIndex((x) => x.id === id);
+      const j = i + dir;
+      if (i < 0 || j < 0 || j >= r.length) return r;
+      const c = [...r];
+      [c[i], c[j]] = [c[j], c[i]];
+      return c;
+    });
+
+  /* Statements are too large to carry, but they're re-addable. Everything you
+     built by hand travels in this file. */
+  const exportSettings = () => {
+    const payload = {
+      app: "ledger-cleaner",
+      version: 1,
+      savedAt: new Date().toISOString(),
+      rules, categories, catMap, overrides, deleted, directions, openings, opts,
+      accounts: sources.map(({ id, name, flip, savedHeaders, savedMapping }) => ({ id, name, flip, savedHeaders, savedMapping })),
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `ledger-cleaner-settings-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setToast({ text: "Settings downloaded." });
+  };
+
+  const importSettings = async (file) => {
+    try {
+      const c = JSON.parse(await file.text());
+      if (c.app !== "ledger-cleaner") throw new Error("wrong file");
+      if (c.rules) setRules(c.rules);
+      if (c.categories) setCategories(c.categories);
+      if (c.catMap) setCatMap(c.catMap);
+      if (c.overrides) setOverrides(c.overrides);
+      if (c.deleted) setDeleted(c.deleted);
+      if (c.directions) setDirections(c.directions);
+      if (c.openings) setOpenings(c.openings);
+      if (c.opts) setOpts((o) => ({ ...o, ...c.opts }));
+      /* Keep any statements already loaded under accounts that carry over. */
+      if (c.accounts) {
+        setSources((cur) => c.accounts.map((a) => ({ ...a, files: cur.find((x) => x.id === a.id)?.files || [] })));
+      }
+      setNotice("");
+      setToast({ text: `Loaded settings from ${file.name}.` });
+    } catch {
+      setNotice("That doesn't look like a Ledger Cleaner settings file.");
+    }
+  };
+
+  const exportFile = (kind) => {
+    const data = visible.map((t) => ({
+      Date: t.date,
+      Account: sources.find((s) => s.id === t.sourceId)?.name || "",
+      Merchant: t.cleanDesc,
+      Category: t.category,
+      Amount: t.amount,
+      "Original description": t.rawDesc,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Transactions");
+    XLSX.writeFile(wb, kind === "csv" ? "transactions-cleaned.csv" : "transactions-cleaned.xlsx");
+  };
+
+  /* ==========================================================================
+   * RENDER
+   * ========================================================================*/
+  return (
+    <div className="min-h-screen bg-slate-100 text-slate-900">
+      {/* ---- top bar ---- */}
+      <header className="bg-white border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-5 py-4 flex flex-wrap items-center gap-4">
+          <div className="mr-auto">
+            <h1 className="text-lg font-semibold tracking-tight text-slate-900">Ledger Cleaner</h1>
+            <p className="text-xs text-slate-500 font-mono mt-0.5">
+              raw bank export → readable merchant → category
+            </p>
+          </div>
+          <nav className="flex rounded-lg border border-slate-300 overflow-hidden">
+            {[["dashboard", "Dashboard"], ["ledger", "Ledger"], ["rules", "Rules"], ["settings", "Settings"]].map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setView(k)}
+                className={`px-3 py-1.5 text-xs font-mono uppercase tracking-widest ${
+                  view === k ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          <button
+            onClick={() => pickFilesFor(null)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+          >
+            <Upload size={15} /> Add a file
+          </button>
+          <button
+            onClick={() => exportFile("xlsx")}
+            disabled={!visible.length}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <Download size={15} /> Export
+          </button>
+        </div>
+      </header>
+
+      <input
+        ref={fileRef}
+        type="file"
+        multiple
+        accept=".xlsx,.xls,.xlsm,.csv,.tsv,.txt,.pdf"
+        className="hidden"
+        onChange={(e) => { handleFiles(e.target.files, uploadTargetRef.current); uploadTargetRef.current = null; e.target.value = ""; }}
+      />
+
+      <input
+        ref={configRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={(e) => { if (e.target.files?.[0]) importSettings(e.target.files[0]); e.target.value = ""; }}
+      />
+
+      {notice && (
+        <div className="max-w-7xl mx-auto px-5 pt-4">
+          <div className="flex items-start gap-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <AlertCircle size={16} className="mt-0.5 shrink-0" />
+            <span className="flex-1">{notice}</span>
+            <button onClick={() => setNotice("")} className="text-amber-700 hover:text-amber-900"><X size={15} /></button>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-5 py-5">
+
+        {/* ==================== DASHBOARD ==================== */}
+        {view === "dashboard" && (
+          <DashboardView
+            sources={sources}
+            transactions={live}
+            openings={openings}
+            onOpening={(name, val) => setOpenings((o) => ({ ...o, [name]: val }))}
+            onJump={jumpToLedger}
+          />
+        )}
+
+        {/* ==================== LEDGER ==================== */}
+        {view === "ledger" && (
+          <div
+            className="space-y-4"
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => { e.preventDefault(); handleFiles(e.dataTransfer.files); }}
+          >
+            {/* stats strip */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              {[
+                ["Transactions", String(visible.length), "text-slate-900"],
+                ["Money in", money(stats.inflow), "text-emerald-700"],
+                ["Money out", money(stats.outflow), "text-rose-700"],
+                ["Need review", String(stats.review), stats.review ? "text-amber-600" : "text-slate-400"],
+              ].map(([label, val, color]) => (
+                <div key={label} className="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3">
+                  <p className="text-xs font-medium uppercase tracking-widest text-slate-500">{label}</p>
+                  <p className={`mt-1 text-2xl font-semibold tabular-nums ${color}`}>{val}</p>
+                </div>
+              ))}
+            </div>
+
+            {/* filters */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-3 py-2.5 flex flex-wrap gap-2 items-center">
+              <div className="relative flex-1 min-w-0">
+                <Search size={14} className="absolute left-2 top-2.5 text-slate-400" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search merchants"
+                  className="w-full pl-7 pr-2 py-1.5 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                />
+              </div>
+              <select
+                value={filterSource}
+                onChange={(e) => setFilterSource(e.target.value)}
+                className="text-sm border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+              >
+                <option value="all">All accounts</option>
+                {sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+              <select
+                value={filterCat}
+                onChange={(e) => setFilterCat(e.target.value)}
+                className="text-sm border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+              >
+                <option value="all">All categories</option>
+                {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <label className="flex items-center gap-1.5 text-sm text-slate-700">
+                <input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} className="accent-indigo-600" />
+                Needs review
+              </label>
+              {(deletedCount > 0 || showDeleted) && (
+                <button
+                  onClick={() => setShowDeleted((v) => !v)}
+                  className={`inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border ${
+                    showDeleted ? "bg-slate-900 text-white border-slate-900" : "border-slate-300 text-slate-700 hover:border-slate-400"
+                  }`}
+                >
+                  <Trash2 size={14} /> Deleted ({deletedCount})
+                </button>
+              )}
+              <button
+                onClick={() => pickFilesFor(null)}
+                className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:border-indigo-500 hover:text-indigo-700"
+              >
+                <Upload size={14} /> Add statement
+              </button>
+              <button
+                onClick={() => setDraftRule({ match: "", type: "contains", rename: "", category: "" })}
+                className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 hover:border-indigo-500 hover:text-indigo-700"
+              >
+                <Plus size={14} /> New rule
+              </button>
+            </div>
+
+            {/* table */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+              {!visible.length ? (
+                <div className="p-4">
+                  {showDeleted ? (
+                    <div className="px-5 py-12 text-center">
+                      <p className="text-slate-700 font-medium">Nothing deleted.</p>
+                      <p className="mt-1 text-sm text-slate-500">Entries you remove land here so you can put them back.</p>
+                    </div>
+                  ) : sources.length ? (
+                    <div className="px-5 py-12 text-center">
+                      <p className="text-slate-700 font-medium">No transactions match these filters.</p>
+                      <p className="mt-1 text-sm text-slate-500">Clear the search or switch the category filter.</p>
+                    </div>
+                  ) : (
+                    <div className="border-2 border-dashed border-slate-300 rounded-xl px-5 py-12 text-center">
+                      <FileSpreadsheet size={26} className="mx-auto text-slate-400" />
+                      <p className="mt-3 text-slate-700 font-medium">Drop a bank statement anywhere on this page</p>
+                      <p className="mt-1 text-sm text-slate-500">.xlsx, .csv, or .pdf</p>
+                      <button
+                        onClick={() => pickFilesFor(null)}
+                        className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+                      >
+                        <Upload size={15} /> Choose a file
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-medium uppercase tracking-widest text-slate-500">
+                      <th className="text-left px-3 py-2 w-20">Date</th>
+                      <th className="text-left px-3 py-2">Merchant</th>
+                      <th className="text-left px-3 py-2 w-44">Category</th>
+                      <th className="text-right px-3 py-2 w-28">Amount</th>
+                      <th className="w-16" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {visible.slice(0, limit).map((t) => (
+                      <tr key={t.id} className={`border-b border-slate-100 hover:bg-slate-50 align-top ${t.deleted ? "opacity-60" : ""}`}>
+                        <td className="px-3 py-2 font-mono text-xs text-slate-500 tabular-nums whitespace-nowrap">
+                          {shortDate(t.date)}
+                        </td>
+                        <td className="px-3 py-2 min-w-0">
+                          {/* the before → after pair */}
+                          <div className={`font-medium text-slate-900 truncate ${t.deleted ? "line-through" : ""}`}>{t.cleanDesc}</div>
+                          <div className="font-mono text-xs text-slate-400 truncate uppercase">{t.rawDesc}</div>
+                        </td>
+                        <td className="px-3 py-2">
+                          <select
+                            value={t.category}
+                            onChange={(e) => setCategory(t, e.target.value)}
+                            className={`w-full text-xs rounded px-1.5 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-indigo-400 ${chipFor(t.category)}`}
+                          >
+                            {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                          </select>
+                          {t.source === "manual" && (
+                            <button onClick={() => clearOverride(t)} className="mt-0.5 text-xs text-slate-400 hover:text-slate-700">
+                              manual · reset
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right whitespace-nowrap">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {!t.deleted && (
+                              <button
+                                title={t.amount < 0 ? "Count this as money in" : "Count this as money out"}
+                                onClick={() => flipFlow(t)}
+                                className="text-slate-300 hover:text-indigo-600 shrink-0"
+                              >
+                                {t.amount < 0 ? <ArrowUpRight size={13} /> : <ArrowDownRight size={13} />}
+                              </button>
+                            )}
+                            <span className={`font-mono tabular-nums ${t.amount < 0 ? "text-slate-800" : "text-emerald-700"}`}>
+                              {money(t.amount)}
+                            </span>
+                          </div>
+                          {t.flow && (
+                            <button
+                              onClick={() => setFlow(t, null)}
+                              title="Go back to the amount as the bank exported it"
+                              className="block ml-auto text-xs text-slate-400 hover:text-slate-700"
+                            >
+                              {t.flow === "in" ? "money in" : "money out"} · reset
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-1 py-2">
+                          {t.deleted ? (
+                            <button
+                              title="Put this entry back"
+                              onClick={() => restoreEntry(t)}
+                              className="text-slate-400 hover:text-indigo-600 inline-flex items-center gap-1 text-xs"
+                            >
+                              <RotateCcw size={13} /> Restore
+                            </button>
+                          ) : (
+                            <div className="flex items-center gap-1">
+                              <button
+                                title="Make a rule from this transaction"
+                                onClick={() =>
+                                  setDraftRule({
+                                    match: t.cleanDesc,
+                                    type: "contains",
+                                    rename: t.cleanDesc,
+                                    category: t.category === "Uncategorized" ? "" : t.category,
+                                  })
+                                }
+                                className="text-slate-300 hover:text-indigo-600"
+                              >
+                                <Wand2 size={14} />
+                              </button>
+                              <button
+                                title="Delete this entry"
+                                onClick={() => deleteEntry(t)}
+                                className="text-slate-300 hover:text-rose-600"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+
+              {visible.length > limit && (
+                <button
+                  onClick={() => setLimit((l) => l + 300)}
+                  className="w-full py-2.5 text-sm text-slate-600 hover:bg-slate-50 border-t border-slate-200"
+                >
+                  Show more · {visible.length - limit} remaining
+                </button>
+              )}
+            </div>
+
+            {visible.length > 0 && (
+              <div className="flex gap-2">
+                <button onClick={() => exportFile("xlsx")} className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:border-indigo-500">
+                  <Download size={14} className="inline mr-1" /> Export Excel
+                </button>
+                <button onClick={() => exportFile("csv")} className="text-sm px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:border-indigo-500">
+                  <Download size={14} className="inline mr-1" /> Export CSV
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ==================== RULES ==================== */}
+        {view === "rules" && (
+          <div className="space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-3.5 flex flex-wrap items-center gap-3">
+              <div className="mr-auto">
+                <h2 className="text-sm font-semibold text-slate-800">Rules</h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Checked top to bottom, first match wins. A rule can rename a merchant, set its category, or both.
+                </p>
+              </div>
+              <button
+                onClick={() => setDraftRule({ match: "", type: "contains", rename: "", category: "" })}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+              >
+                <Plus size={15} /> New rule
+              </button>
+            </div>
+
+            {!rules.length ? (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-5 py-16 text-center">
+                <Wand2 size={24} className="mx-auto text-slate-300" />
+                <p className="mt-3 text-slate-700 font-medium">No rules yet</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  The fastest way to make one is the wand button on any row in the Ledger — it fills in the merchant for you.
+                </p>
+              </div>
+            ) : (
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-medium uppercase tracking-widest text-slate-500">
+                      <th className="text-left px-4 py-2 w-12">#</th>
+                      <th className="text-left px-3 py-2">When the description</th>
+                      <th className="text-left px-3 py-2 w-56">Shows as</th>
+                      <th className="text-left px-3 py-2 w-44">Category</th>
+                      <th className="text-right px-3 py-2 w-24">Order</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rules.map((r, i) => (
+                      <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                        <td className="px-4 py-2.5 text-slate-400 tabular-nums">{i + 1}</td>
+                        <td className="px-3 py-2.5 min-w-0">
+                          <span className="text-slate-500 mr-1.5">{r.type}</span>
+                          <span className="font-mono text-slate-800 break-all">{r.match}</span>
+                        </td>
+                        <td className="px-3 py-2.5 text-slate-700 truncate">
+                          {r.rename ? r.rename : <span className="text-slate-400">automatic name</span>}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {r.category ? (
+                            <span className={`inline-block px-2 py-0.5 rounded text-xs ${chipFor(r.category)}`}>{r.category}</span>
+                          ) : (
+                            <span className="text-slate-400 text-xs">automatic guess</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => moveRule(r.id, -1)} disabled={i === 0} className="text-slate-400 hover:text-slate-800 disabled:opacity-25"><ChevronUp size={15} /></button>
+                            <button onClick={() => moveRule(r.id, 1)} disabled={i === rules.length - 1} className="text-slate-400 hover:text-slate-800 disabled:opacity-25"><ChevronDown size={15} /></button>
+                            <button onClick={() => removeRule(r.id)} className="text-slate-400 hover:text-rose-600 ml-1"><Trash2 size={14} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* ---- categories ---- */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+              <div className="px-4 pt-3.5 pb-1 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">Categories</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    These fill the dropdown on every transaction. Renaming one updates it everywhere,
+                    including transactions the built-in rules already sorted.
+                  </p>
+                </div>
+                <button
+                  onClick={resetCategories}
+                  className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-indigo-700 shrink-0"
+                >
+                  <RotateCcw size={13} /> Reset to built-in list
+                </button>
+              </div>
+
+              <div className="p-4 pt-2">
+                <div className="flex gap-2 mb-3">
+                  <input
+                    value={newCat}
+                    onChange={(e) => setNewCat(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") addCategory(newCat); }}
+                    placeholder="Add a category"
+                    className="flex-1 min-w-0 text-sm border border-slate-300 rounded-lg px-2.5 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  />
+                  <button
+                    onClick={() => addCategory(newCat)}
+                    disabled={!newCat.trim() || categories.includes(newCat.trim())}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500 disabled:opacity-40"
+                  >
+                    <Plus size={15} /> Add
+                  </button>
+                </div>
+
+                <ul className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2">
+                  {categories.map((cat) => {
+                    const locked = SYSTEM_CATEGORIES.has(cat);
+                    const editing = editingCat?.orig === cat;
+                    const used = catCounts[cat] || 0;
+                    return (
+                      <li key={cat} className="border border-slate-200 rounded-lg px-2.5 py-2 flex items-center gap-2">
+                        {editing ? (
+                          <>
+                            <input
+                              autoFocus
+                              value={editingCat.value}
+                              onChange={(e) => setEditingCat({ orig: cat, value: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") renameCategory(cat, editingCat.value);
+                                if (e.key === "Escape") setEditingCat(null);
+                              }}
+                              className="flex-1 min-w-0 text-sm border-b border-indigo-500 bg-transparent focus:outline-none"
+                            />
+                            <button onClick={() => renameCategory(cat, editingCat.value)} className="text-emerald-600 hover:text-emerald-700 shrink-0"><Check size={15} /></button>
+                            <button onClick={() => setEditingCat(null)} className="text-slate-400 hover:text-slate-700 shrink-0"><X size={15} /></button>
+                          </>
+                        ) : (
+                          <>
+                            <span className={`px-2 py-0.5 rounded text-xs truncate ${chipFor(cat)}`}>{cat}</span>
+                            <span className="text-xs text-slate-400 tabular-nums ml-auto shrink-0">{used}</span>
+                            {locked ? (
+                              <span
+                                title="Built into how totals are calculated, so this one can't be changed"
+                                className="text-xs text-slate-400 shrink-0"
+                              >
+                                fixed
+                              </span>
+                            ) : (
+                              <>
+                                <button
+                                  onClick={() => setEditingCat({ orig: cat, value: cat })}
+                                  title="Rename"
+                                  className="text-slate-400 hover:text-indigo-600 shrink-0"
+                                >
+                                  <Wand2 size={13} />
+                                </button>
+                                <button
+                                  onClick={() => deleteCategory(cat)}
+                                  title={used ? `Delete — ${used} transactions go back to Uncategorized` : "Delete"}
+                                  className="text-slate-400 hover:text-rose-600 shrink-0"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+
+                <p className="text-xs text-slate-500 mt-3">
+                  The number is how many loaded transactions currently sit in that category.
+                  Deleting one sends its transactions back to Uncategorized; it doesn't delete them.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ==================== SETTINGS ==================== */}
+        {view === "settings" && (
+          <div className="space-y-4">
+            {/* accounts */}
+            <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+              <div className="px-4 pt-3.5 pb-1 flex items-center justify-between gap-2">
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-800">Accounts</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Create an account, then file statements into it. Uploading never renames the account.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setExpanded(createAccount())}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-700 hover:border-indigo-500 hover:text-indigo-700 shrink-0"
+                >
+                  <Plus size={14} /> New account
+                </button>
+              </div>
+
+              <div className="p-4 pt-2">
+                {!sources.length ? (
+                  <div className="border-2 border-dashed border-slate-300 rounded-xl p-8 text-center">
+                    <FileSpreadsheet size={24} className="mx-auto text-slate-400" />
+                    <p className="mt-2 text-sm text-slate-700 font-medium">Start with an account</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Name it the way you think of it — "Chase Checking" — then file statements into it.
+                    </p>
+                    <button
+                      onClick={() => setExpanded(createAccount())}
+                      className="mt-4 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+                    >
+                      <Plus size={15} /> New account
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {sources.map((a) => {
+                      const files = a.files || [];
+                      const count = accountTransactions(a).length;
+                      const open = expanded === a.id;
+                      return (
+                        <div key={a.id} className="border border-slate-200 rounded-lg">
+                          <div className="flex items-center gap-2 px-3 py-2.5">
+                            <input
+                              value={a.name}
+                              onChange={(e) => updateSource(a.id, { name: e.target.value })}
+                              placeholder="Name this account"
+                              className="flex-1 min-w-0 text-sm font-medium bg-transparent border-b border-transparent hover:border-slate-300 focus:border-indigo-500 focus:outline-none"
+                            />
+                            <span className="text-xs text-slate-500 tabular-nums shrink-0">
+                              {files.length} {files.length === 1 ? "statement" : "statements"} · {count} tx
+                            </span>
+                            <button onClick={() => setExpanded(open ? null : a.id)} className="text-slate-400 hover:text-slate-700">
+                              {open ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                            </button>
+                            <button
+                              onClick={() => setSources((x) => x.filter((y) => y.id !== a.id))}
+                              title="Delete this account and its statements"
+                              className="text-slate-400 hover:text-rose-600"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+
+                          {open && (
+                            <div className="px-3 pb-3 pt-2 border-t border-slate-100 space-y-3 text-xs">
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={a.flip}
+                                  onChange={(e) => updateSource(a.id, { flip: e.target.checked })}
+                                  className="accent-indigo-600"
+                                />
+                                <span>Flip the sign (for cards that list purchases as positive)</span>
+                              </label>
+
+                              {!files.length ? (
+                                <p className="text-slate-500 py-2">No statements filed here yet.</p>
+                              ) : (
+                                <ul className="space-y-2">
+                                  {files.map((f) => {
+                                    const fOpen = expandedFile === f.fid;
+                                    return (
+                                      <li key={f.fid} className="border border-slate-200 rounded">
+                                        <div className="flex items-center gap-2 px-2 py-1.5">
+                                          <FileSpreadsheet size={13} className="text-slate-400 shrink-0" />
+                                          <span className="flex-1 min-w-0 truncate font-mono text-slate-700">{f.fileName}</span>
+                                          <span className="text-slate-500 tabular-nums shrink-0">
+                                            {fileTransactions(f, a).length} tx
+                                          </span>
+                                          <button
+                                            onClick={() => setExpandedFile(fOpen ? null : f.fid)}
+                                            className="text-slate-500 hover:text-indigo-700 shrink-0"
+                                          >
+                                            {fOpen ? "hide columns" : "columns"}
+                                          </button>
+                                          <button
+                                            onClick={() => removeStatement(a.id, f.fid)}
+                                            title="Remove this statement"
+                                            className="text-slate-400 hover:text-rose-600 shrink-0"
+                                          >
+                                            <X size={13} />
+                                          </button>
+                                        </div>
+
+                                        {fOpen && (
+                                          <div className="px-2 pb-2 pt-1.5 border-t border-slate-100 space-y-2">
+                                            <p className="font-mono text-slate-400 truncate">sheet: {f.sheet}</p>
+                                            <div className="grid grid-cols-2 gap-2">
+                                              {[
+                                                ["date", "Date"],
+                                                ["desc", "Description"],
+                                                ["amount", "Amount"],
+                                                ["debit", "Debit"],
+                                                ["credit", "Credit"],
+                                              ].map(([field, label]) => (
+                                                <label key={field} className="block">
+                                                  <span className="text-slate-500">{label}</span>
+                                                  <select
+                                                    value={f.mapping[field]}
+                                                    onChange={(e) => updateFileMapping(a.id, f.fid, field, Number(e.target.value))}
+                                                    className="mt-0.5 w-full border border-slate-300 rounded px-1.5 py-1 bg-white"
+                                                  >
+                                                    <option value={-1}>— none —</option>
+                                                    {f.headers.map((h, i) => (
+                                                      <option key={i} value={i}>{h || `Column ${i + 1}`}</option>
+                                                    ))}
+                                                  </select>
+                                                </label>
+                                              ))}
+                                            </div>
+                                            <p className="text-slate-500">
+                                              Applies to every statement here with the same layout, and to the next one you add.
+                                            </p>
+                                          </div>
+                                        )}
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+
+                              <button
+                                onClick={() => pickFilesFor(a.id)}
+                                className="w-full inline-flex items-center justify-center gap-1.5 border border-dashed border-slate-300 rounded py-2 text-slate-600 hover:border-indigo-500 hover:text-indigo-700"
+                              >
+                                <Upload size={13} /> Add statement to {a.name || "this account"}
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <button
+                      onClick={() => setExpanded(createAccount())}
+                      className="w-full text-sm border border-dashed border-slate-300 rounded-lg py-2 text-slate-600 hover:border-indigo-500 hover:text-indigo-700"
+                    >
+                      <Plus size={14} className="inline mr-1" /> New account
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {/* cleanup */}
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+                <div className="px-4 pt-3.5 pb-1">
+                  <h2 className="text-sm font-semibold text-slate-800">Name cleanup</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">How raw descriptions get tidied when no rule matches.</p>
+                </div>
+                <div className="p-4 pt-2 space-y-3 text-sm">
+                  {[
+                    ["trimLocation", "Trim city and state off the end", "STARBUCKS RANCHO CUCAM CA → Starbucks"],
+                    ["titleCase", "Convert ALL CAPS to Title Case", "TRADER JOES → Trader Joes"],
+                    ["dedupe", "Skip exact duplicate rows", "Same date, amount, and description"],
+                  ].map(([k, label, hint]) => (
+                    <label key={k} className="flex gap-2.5 items-start">
+                      <input
+                        type="checkbox"
+                        checked={opts[k]}
+                        onChange={(e) => setOpts((o) => ({ ...o, [k]: e.target.checked }))}
+                        className="mt-0.5 accent-indigo-600"
+                      />
+                      <span>
+                        <span className="block text-slate-800">{label}</span>
+                        <span className="block font-mono text-xs text-slate-500">{hint}</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* data */}
+              <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+                <div className="px-4 pt-3.5 pb-1">
+                  <h2 className="text-sm font-semibold text-slate-800">Your data</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Carry your setup to another computer, or keep a backup.</p>
+                </div>
+                <div className="p-4 pt-2 space-y-3 text-sm">
+                  <dl className="space-y-1.5 text-xs">
+                    {[
+                      ["Rules", rules.length],
+                      ["Manual category fixes", Object.keys(overrides).length],
+                      ["Deleted entries", deletedCount],
+                      ["Direction changes", Object.keys(directions).length],
+                      ["Opening balances set", Object.values(openings).filter((v) => parseAmount(v)).length],
+                      ["Accounts loaded", sources.length],
+                    ].map(([l, v]) => (
+                      <div key={l} className="flex justify-between border-b border-slate-100 pb-1">
+                        <dt className="text-slate-500">{l}</dt>
+                        <dd className="tabular-nums text-slate-800">{v}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="flex flex-wrap gap-4">
+                    <button
+                      onClick={() => setOverrides({})}
+                      className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-rose-600"
+                    >
+                      <RotateCcw size={13} /> Clear manual category fixes
+                    </button>
+                    <button
+                      onClick={() => { setDeleted({}); setShowDeleted(false); }}
+                      disabled={!deletedCount}
+                      className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-indigo-700 disabled:opacity-40"
+                    >
+                      <RotateCcw size={13} /> Restore all deleted entries
+                    </button>
+                    <button
+                      onClick={() => setDirections({})}
+                      disabled={!Object.keys(directions).length}
+                      className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-indigo-700 disabled:opacity-40"
+                    >
+                      <RotateCcw size={13} /> Clear direction changes
+                    </button>
+                  </div>
+                  <div className="pt-3 border-t border-slate-100 space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={exportSettings}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500"
+                      >
+                        <Download size={14} /> Download settings
+                      </button>
+                      <button
+                        onClick={() => configRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-sm text-slate-700 hover:border-indigo-500 hover:text-indigo-700"
+                      >
+                        <Upload size={14} /> Load settings
+                      </button>
+                    </div>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      The settings file holds your accounts, rules, categories, manual fixes, deleted entries and
+                      opening balances — everything except the statements themselves. Load it on another computer
+                      to pick up where you left off, then add that machine's statement files.
+                    </p>
+                    <p className="text-xs text-slate-500 leading-relaxed">
+                      Your setup is also saved automatically against your account between sessions. Statement
+                      contents are never saved, so re-add them each time you open this.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {toast && (
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white text-sm rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-4 max-w-full">
+          <span className="truncate">{toast.text}</span>
+          {toast.undo && (
+            <button
+              onClick={() => { toast.undo(); setToast(null); }}
+              className="font-semibold text-indigo-300 hover:text-indigo-200 shrink-0"
+            >
+              Undo
+            </button>
+          )}
+          <button onClick={() => setToast(null)} className="text-slate-400 hover:text-white shrink-0"><X size={14} /></button>
+        </div>
+      )}
+
+      {/* ---- check what came out of the PDF before trusting it ---- */}
+      {preview && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center p-4 z-50" onClick={() => setPreview(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-full flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 flex items-start justify-between gap-2">
+              <div>
+                <h3 className="font-semibold text-sm">Check the extracted rows</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  PDFs have no table structure, so this is read line by line. Look it over before filing.
+                </p>
+              </div>
+              <button onClick={() => setPreview(null)} className="text-slate-400 hover:text-slate-700 shrink-0"><X size={16} /></button>
+            </div>
+
+            <div className="overflow-y-auto p-4 space-y-4">
+              {preview.parsed.map((f) => (
+                <div key={f.fid}>
+                  <p className="text-sm font-medium text-slate-800 truncate">{f.fileName}</p>
+                  <p className="text-xs text-slate-500 mb-2">
+                    {f.rows.length - 1} rows found{f.kind === "pdf" ? " · read from PDF text" : ""}
+                  </p>
+                  <div className="border border-slate-200 rounded-lg overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500">
+                          {f.headers.map((h, i) => (
+                            <th key={i} className="text-left px-2 py-1.5 font-medium whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {f.rows.slice(1, 9).map((r, ri) => (
+                          <tr key={ri} className="border-b border-slate-100">
+                            {f.headers.map((_, ci) => (
+                              <td key={ci} className="px-2 py-1.5 font-mono text-slate-700 whitespace-nowrap">{String(r[ci] ?? "")}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  {f.rows.length > 9 && (
+                    <p className="text-xs text-slate-400 mt-1">Showing the first 8 of {f.rows.length - 1}.</p>
+                  )}
+                </div>
+              ))}
+              <p className="text-xs text-slate-500 leading-relaxed border-t border-slate-100 pt-3">
+                If a column landed in the wrong place, file it anyway and fix the mapping under
+                Settings → the account → columns. A "Number 2" column is usually the running balance,
+                and should stay unmapped.
+              </p>
+            </div>
+
+            <div className="px-4 py-3 border-t border-slate-200 flex justify-end gap-2 shrink-0">
+              <button onClick={() => setPreview(null)} className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900">Discard</button>
+              <button
+                onClick={() => { fileStatements(preview.parsed, preview.targetId); setPreview(null); }}
+                className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-500 inline-flex items-center gap-1.5"
+              >
+                <Check size={14} /> File it
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- which account does this statement belong to? ---- */}
+      {pendingFiles && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center p-4 z-50" onClick={() => setPendingFiles(null)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-sm">File this statement</h3>
+                <p className="text-xs text-slate-500 mt-0.5 truncate">
+                  {pendingFiles.map((f) => f.fileName).join(", ")}
+                </p>
+              </div>
+              <button onClick={() => setPendingFiles(null)} className="text-slate-400 hover:text-slate-700 shrink-0"><X size={16} /></button>
+            </div>
+            <ul className="max-h-72 overflow-y-auto divide-y divide-slate-100">
+              {sources.map((a) => (
+                <li key={a.id}>
+                  <button
+                    onClick={() => { attachStatements(a.id, pendingFiles); setPendingFiles(null); }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-slate-50 flex items-center justify-between gap-2"
+                  >
+                    <span className="text-sm font-medium truncate">{a.name}</span>
+                    <span className="text-xs text-slate-500 shrink-0">
+                      {(a.files || []).length} {(a.files || []).length === 1 ? "statement" : "statements"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div className="px-4 py-3 border-t border-slate-200 flex justify-between items-center gap-2">
+              <button
+                onClick={() => {
+                  const id = createAccount(pendingFiles[0].fileName.replace(/\.[^.]+$/, ""));
+                  attachStatements(id, pendingFiles);
+                  setPendingFiles(null);
+                  setExpanded(id);
+                }}
+                className="text-sm text-indigo-700 hover:text-indigo-900 inline-flex items-center gap-1.5"
+              >
+                <Plus size={14} /> New account instead
+              </button>
+              <button onClick={() => setPendingFiles(null)} className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ---- rule editor ---- */}
+      {draftRule && (
+        <div className="fixed inset-0 bg-slate-900/40 flex items-center justify-center p-4 z-50" onClick={() => setDraftRule(null)}>
+          <div className="bg-white rounded shadow-xl w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+              <h3 className="font-semibold text-sm">New rule</h3>
+              <button onClick={() => setDraftRule(null)} className="text-slate-400 hover:text-slate-700"><X size={16} /></button>
+            </div>
+            <div className="p-4 space-y-3 text-sm">
+              <label className="block">
+                <span className="text-xs text-slate-600">When the description</span>
+                <div className="flex gap-2 mt-1">
+                  <select
+                    value={draftRule.type}
+                    onChange={(e) => setDraftRule({ ...draftRule, type: e.target.value })}
+                    className="border border-slate-300 rounded px-2 py-1.5 bg-white"
+                  >
+                    <option value="contains">contains</option>
+                    <option value="starts">starts with</option>
+                    <option value="exact">is exactly</option>
+                    <option value="regex">matches regex</option>
+                  </select>
+                  <input
+                    value={draftRule.match}
+                    onChange={(e) => setDraftRule({ ...draftRule, match: e.target.value })}
+                    className="flex-1 border border-slate-300 rounded px-2 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                    placeholder="TRADER JOE"
+                  />
+                </div>
+              </label>
+
+              <label className="block">
+                <span className="text-xs text-slate-600">Show it as</span>
+                <input
+                  value={draftRule.rename}
+                  onChange={(e) => setDraftRule({ ...draftRule, rename: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="Leave blank to keep the automatic name"
+                />
+              </label>
+
+              <label className="block">
+                <span className="text-xs text-slate-600">Category</span>
+                <select
+                  value={draftRule.category}
+                  onChange={(e) => setDraftRule({ ...draftRule, category: e.target.value })}
+                  className="mt-1 w-full border border-slate-300 rounded px-2 py-1.5 bg-white"
+                >
+                  <option value="">Leave to the automatic guess</option>
+                  {categories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+
+              <p className="text-xs text-slate-500">
+                Matching is case-insensitive and checks both the original and cleaned text.
+                Rules apply to every account at once.
+              </p>
+            </div>
+            <div className="px-4 py-3 border-t border-slate-200 flex justify-end gap-2">
+              <button onClick={() => setDraftRule(null)} className="px-3 py-1.5 text-sm text-slate-600 hover:text-slate-900">Cancel</button>
+              <button
+                onClick={() => { if (draftRule.match.trim()) { addRule(draftRule); setDraftRule(null); setView("rules"); } }}
+                className="px-3 py-1.5 text-sm rounded bg-indigo-600 text-white hover:bg-indigo-500 inline-flex items-center gap-1.5"
+              >
+                <Check size={14} /> Save rule
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+</script>
+
+<script>
+(function () {
+  var msg = document.getElementById("boot-msg");
+  function say(t) { if (msg) msg.textContent = t; }
+
+  /* ---- storage ----
+     Three modes, decided at boot:
+       server : a backend is answering, so settings sync between computers
+       local  : localStorage only (opened as a plain file, or no backend)
+       memory : the browser blocked storage; lasts until the tab closes
+  ---------------------------------------------------------------------- */
+  var mem = {}, persistent = true, serverMode = false, serverCache = {};
+  try {
+    localStorage.setItem("__probe", "1");
+    localStorage.removeItem("__probe");
+  } catch (e) { persistent = false; }
+
+  function readLocal(k)     { return persistent ? localStorage.getItem(k) : (k in mem ? mem[k] : null); }
+  function writeLocal(k, v) { try { persistent ? localStorage.setItem(k, v) : (mem[k] = v); } catch (e) { mem[k] = v; } }
+  function dropLocal(k)     { try { persistent ? localStorage.removeItem(k) : delete mem[k]; } catch (e) {} }
+  function localKeys()      { try { return persistent ? Object.keys(localStorage) : Object.keys(mem); } catch (e) { return []; } }
+
+  /* Ask the backend for everything once. If nothing answers, we're standalone. */
+  window.__ledgerProbe = function () {
+    if (typeof fetch !== "function" || location.protocol === "file:") return Promise.resolve();
+    return fetch("api/kv", { headers: { Accept: "application/json" } })
+      .then(function (r) { if (!r.ok) throw new Error("no backend"); return r.json(); })
+      .then(function (obj) { serverMode = true; serverCache = obj || {}; })
+      .catch(function () { serverMode = false; });
+  };
+
+  window.storage = {
+    get: function (k) {
+      var v = serverMode ? (k in serverCache ? serverCache[k] : null) : readLocal(k);
+      /* Fall back to whatever this machine had cached if the server is empty. */
+      if (v === null && serverMode) v = readLocal(k);
+      if (v === null) return Promise.reject(new Error("not found"));
+      return Promise.resolve({ key: k, value: v });
+    },
+    set: function (k, v) {
+      writeLocal(k, v); // always keep a local copy, so a dropped connection costs nothing
+      if (!serverMode) return Promise.resolve({ key: k, value: v });
+      serverCache[k] = v;
+      return fetch("api/kv/" + encodeURIComponent(k), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value: v })
+      }).then(function (r) {
+        if (!r.ok) throw new Error("save failed");
+        return { key: k, value: v };
+      });
+    },
+    delete: function (k) {
+      dropLocal(k);
+      if (serverMode) {
+        delete serverCache[k];
+        fetch("api/kv/" + encodeURIComponent(k), { method: "DELETE" }).catch(function () {});
+      }
+      return Promise.resolve({ key: k, deleted: true });
+    },
+    list: function (p) {
+      var keys = serverMode ? Object.keys(serverCache) : localKeys();
+      return Promise.resolve({ keys: keys.filter(function (k) { return !p || k.indexOf(p) === 0; }) });
+    }
+  };
+
+  Object.defineProperty(window, "__ledgerMode", {
+    get: function () { return serverMode ? "server" : persistent ? "local" : "memory"; }
+  });
+
+  /* ---- load a script, trying each mirror in turn ---- */
+  function loadOne(urls, done) {
+    var i = 0;
+    (function attempt() {
+      if (i >= urls.length) return done(new Error(urls[0]));
+      var s = document.createElement("script");
+      s.src = urls[i++];
+      s.onload = function () { done(null); };
+      s.onerror = attempt;
+      document.head.appendChild(s);
+    })();
+  }
+
+  var LIBS = [
+    { name: "React", urls: ["https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js",
+                            "https://unpkg.com/react@18.3.1/umd/react.production.min.js"] },
+    { name: "ReactDOM", urls: ["https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js",
+                               "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"] },
+    { name: "spreadsheet reader", urls: ["https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+                                         "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"] },
+    { name: "charts", urls: ["https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js",
+                             "https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.min.js"] },
+    { name: "compiler", urls: ["https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js",
+                               "https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"] }
+  ];
+
+  var step = 0;
+  (function next(err) {
+    if (err) return say("Couldn't load a required library. Check your internet connection and reload.");
+    if (step > 0) say("Loaded " + LIBS[step - 1].name + "\u2026");
+    if (step === LIBS.length) {
+      say("Checking for saved settings\u2026");
+      return window.__ledgerProbe().then(start);
+    }
+    var lib = LIBS[step++];
+    loadOne(lib.urls, next);
+  })();
+
+  function start() {
+    try {
+      say("Starting\u2026");
+      const ICON_PATHS = {"Upload": ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M17 8l-5-5-5 5", "M12 3v12"], "Download": ["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4", "M7 10l5 5 5-5", "M12 15V3"], "Trash2": ["M3 6h18", "M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6", "M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2", "M10 11v6", "M14 11v6"], "Plus": ["M5 12h14", "M12 5v14"], "Search": [{"c": [11, 11, 8]}, "m21 21-4.3-4.3"], "Wand2": ["M15 4V2", "M15 16v-2", "M8 9h2", "M20 9h2", "M17.8 11.8 19 13", "M15 9h.01", "M17.8 6.2 19 5", "m3 21 9-9", "M12.2 6.2 11 5"], "X": ["M18 6 6 18", "m6 6 12 12"], "Check": ["M20 6 9 17l-5-5"], "ChevronDown": ["m6 9 6 6 6-6"], "ChevronUp": ["m18 15-6-6-6 6"], "AlertCircle": [{"c": [12, 12, 10]}, "M12 8v4", "M12 16h.01"], "AlertTriangle": ["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z", "M12 9v4", "M12 17h.01"], "FileSpreadsheet": ["M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z", "M14 2v5h5", "M8 13h2", "M14 13h2", "M8 17h2", "M14 17h2"], "RotateCcw": ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5"], "ArrowUpRight": ["M7 7h10v10", "M7 17 17 7"], "ArrowDownRight": ["m7 7 10 10", "M17 7v10H7"], "Calendar": [{"r": [3, 4, 18, 18, 2]}, "M16 2v4", "M8 2v4", "M3 10h18"], "Wallet": ["M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1", "M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"]};
+
+      /* Icons as plain SVG, so there's no icon library to fetch. */
+      function makeIcon(spec) {
+        return function (props) {
+          props = props || {};
+          var size = props.size || 16;
+          var kids = spec.map(function (d, i) {
+            if (typeof d === "string") return React.createElement("path", { key: i, d: d });
+            if (d.c) return React.createElement("circle", { key: i, cx: d.c[0], cy: d.c[1], r: d.c[2] });
+            return React.createElement("rect", { key: i, x: d.r[0], y: d.r[1], width: d.r[2], height: d.r[3], rx: d.r[4] });
+          });
+          return React.createElement("svg", {
+            xmlns: "http://www.w3.org/2000/svg", width: size, height: size, viewBox: "0 0 24 24",
+            fill: "none", stroke: "currentColor", strokeWidth: 2,
+            strokeLinecap: "round", strokeLinejoin: "round",
+            className: props.className || "", style: { display: "inline-block", flexShrink: 0 }
+          }, kids);
+        };
+      }
+      var Icons = {};
+      Object.keys(ICON_PATHS).forEach(function (n) { Icons[n] = makeIcon(ICON_PATHS[n]); });
+
+      var preamble =
+        "const {useState,useEffect,useMemo,useRef,useCallback} = React;\n" +
+        "const {BarChart,Bar,AreaChart,Area,ComposedChart,Line,Cell,LabelList,XAxis,YAxis," +
+        "CartesianGrid,Tooltip,ReferenceLine,ResponsiveContainer,RadialBarChart,RadialBar,PolarAngleAxis} = Recharts;\n" +
+        Object.keys(ICON_PATHS).map(function (n) { return "const " + n + " = __ICONS." + n + ";"; }).join("\n") + "\n";
+
+      var source = document.getElementById("app-source").textContent;
+      ["React", "ReactDOM", "XLSX", "Recharts", "Babel"].forEach(function (g) {
+        if (!window[g]) throw new Error(g + " did not load");
+      });
+
+      var code = Babel.transform(preamble + source + "\nwindow.__LedgerApp = App;", {
+        presets: [["react", { runtime: "classic" }]]
+      }).code;
+
+      new Function("React", "Recharts", "XLSX", "__ICONS", code)(React, Recharts, XLSX, Icons);
+      var App = window.__LedgerApp;
+      if (!App) throw new Error("the app did not compile");
+
+      ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+
+      console.log("Ledger Cleaner storage mode:", window.__ledgerMode);
+      if (window.__ledgerMode === "memory") {
+        console.warn("This browser blocked storage for this page. Your setup will not survive a reload \u2014 use Settings \u2192 Download settings to keep it.");
+      }
+    } catch (e) {
+      console.error(e);
+      say("Something went wrong starting the app: " + e.message);
+    }
+  }
+})();
+</script>
+</body>
+</html>
