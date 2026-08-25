@@ -560,6 +560,9 @@ function chipFor(cat) {
 }
 
 const STORE_KEY = "ledger-cleaner:config-v1";
+/* Loaded statements are cached on this computer only. They are deliberately
+   kept out of STORE_KEY so they never travel to a server or a settings file. */
+const STATEMENT_KEY = "statements-v1";
 
 const monthKey = (iso) => (iso ? iso.slice(0, 7) : "");
 const monthLabel = (k) => {
@@ -1217,6 +1220,7 @@ function App() {
   /* ---- persistence ---- */
   useEffect(() => {
     (async () => {
+      let accounts = null;
       try {
         const res = await window.storage?.get(STORE_KEY);
         if (res?.value) {
@@ -1226,15 +1230,61 @@ function App() {
           if (c.categories) setCategories(c.categories);
           if (c.opts) setOpts((o) => ({ ...o, ...c.opts }));
           if (c.openings) setOpenings(c.openings);
-          if (c.accounts) setSources(c.accounts.map((a) => ({ ...a, files: [] })));
+          if (c.accounts) accounts = c.accounts.map((a) => ({ ...a, files: [] }));
           if (c.deleted) setDeleted(c.deleted);
           if (c.directions) setDirections(c.directions);
           if (c.catMap) setCatMap(c.catMap);
         }
       } catch { /* first run, nothing saved yet */ }
+
+      /* Put the statements back where they were. */
+      try {
+        const raw = window.localCache?.get(STATEMENT_KEY);
+        if (raw && accounts) {
+          const byAccount = JSON.parse(raw);
+          accounts = accounts.map((a) => ({ ...a, files: byAccount[a.id] || [] }));
+        }
+      } catch { /* cache unreadable; accounts just start empty */ }
+
+      if (accounts) setSources(accounts);
       setLoaded(true);
     })();
   }, []);
+
+  /* Keep the cache in step with what's loaded. If the browser runs out of room,
+     drop the oldest statements rather than losing everything. */
+  useEffect(() => {
+    if (!loaded || !window.localCache) return;
+    const timer = setTimeout(() => {
+      const byAccount = {};
+      for (const a of sources) if (a.files?.length) byAccount[a.id] = a.files;
+      if (!Object.keys(byAccount).length) {
+        window.localCache.remove(STATEMENT_KEY);
+        return;
+      }
+      try {
+        window.localCache.set(STATEMENT_KEY, JSON.stringify(byAccount));
+      } catch {
+        const queue = [];
+        for (const id of Object.keys(byAccount)) byAccount[id].forEach((f) => queue.push([id, f.fid]));
+        let dropped = 0;
+        let saved = false;
+        while (queue.length > 1 && !saved) {
+          const [id, fid] = queue.shift();
+          byAccount[id] = byAccount[id].filter((f) => f.fid !== fid);
+          if (!byAccount[id].length) delete byAccount[id];
+          dropped++;
+          try { window.localCache.set(STATEMENT_KEY, JSON.stringify(byAccount)); saved = true; } catch { /* keep trimming */ }
+        }
+        setNotice(
+          saved
+            ? `Not enough browser storage to remember every statement, so the ${dropped} oldest ${dropped === 1 ? "was" : "were"} left out. Everything still shows until you reload.`
+            : "Not enough browser storage to remember these statements after a reload."
+        );
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [sources, loaded]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -2321,6 +2371,7 @@ function App() {
                       ["Direction changes", Object.keys(directions).length],
                       ["Opening balances set", Object.values(openings).filter((v) => parseAmount(v)).length],
                       ["Accounts loaded", sources.length],
+                      ["Statements remembered", sources.reduce((n, a) => n + (a.files?.length || 0), 0)],
                     ].map(([l, v]) => (
                       <div key={l} className="flex justify-between border-b border-slate-100 pb-1">
                         <dt className="text-slate-500">{l}</dt>
@@ -2371,9 +2422,20 @@ function App() {
                       to pick up where you left off, then add that machine's statement files.
                     </p>
                     <p className="text-xs text-slate-500 leading-relaxed">
-                      Your setup is also saved automatically against your account between sessions. Statement
-                      contents are never saved, so re-add them each time you open this.
+                      Loaded statements are remembered on this computer so a refresh doesn't lose them. They stay
+                      in this browser only — they're never part of the settings file and never sent anywhere.
                     </p>
+                    <button
+                      onClick={() => {
+                        setSources((l) => l.map((a) => ({ ...a, files: [] })));
+                        try { window.localCache?.remove(STATEMENT_KEY); } catch {}
+                        setToast({ text: "Cleared loaded statements. Your accounts and rules are untouched." });
+                      }}
+                      disabled={!sources.some((a) => a.files?.length)}
+                      className="inline-flex items-center gap-1.5 text-xs text-slate-600 hover:text-rose-600 disabled:opacity-40"
+                    >
+                      <Trash2 size={13} /> Clear loaded statements
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2648,6 +2710,25 @@ function App() {
     list: function (p) {
       var keys = serverMode ? Object.keys(serverCache) : localKeys();
       return Promise.resolve({ keys: keys.filter(function (k) { return !p || k.indexOf(p) === 0; }) });
+    }
+  };
+
+  /* Statement data lives here. Deliberately NOT part of window.storage, so it
+     never reaches a backend and never lands in the settings file. set() is
+     allowed to throw on quota so the app knows to trim. */
+  var CACHE_PREFIX = "ledger-cache:";
+  window.localCache = {
+    get: function (k) {
+      try { return persistent ? localStorage.getItem(CACHE_PREFIX + k) : (mem[CACHE_PREFIX + k] || null); }
+      catch (e) { return null; }
+    },
+    set: function (k, v) {
+      if (!persistent) { mem[CACHE_PREFIX + k] = v; return; }
+      localStorage.setItem(CACHE_PREFIX + k, v); // throws when full, on purpose
+    },
+    remove: function (k) {
+      try { persistent ? localStorage.removeItem(CACHE_PREFIX + k) : delete mem[CACHE_PREFIX + k]; }
+      catch (e) {}
     }
   };
 
