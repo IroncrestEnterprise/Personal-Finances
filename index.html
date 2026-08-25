@@ -2673,10 +2673,17 @@ function App() {
                             "https://unpkg.com/react@18.3.1/umd/react.production.min.js"] },
     { name: "ReactDOM", urls: ["https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js",
                                "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"] },
+    /* recharts' UMD build reads ReactIs and PropTypes off window; without them
+       the file loads but throws while executing and never sets window.Recharts. */
+    { name: "react-is", urls: ["https://unpkg.com/react-is@18.3.1/umd/react-is.production.min.js",
+                               "https://cdn.jsdelivr.net/npm/react-is@18.3.1/umd/react-is.production.min.js"] },
+    { name: "prop-types", urls: ["https://unpkg.com/prop-types@15.8.1/prop-types.min.js",
+                                 "https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"] },
     { name: "spreadsheet reader", urls: ["https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
                                          "https://unpkg.com/xlsx@0.18.5/dist/xlsx.full.min.js"] },
     { name: "charts", urls: ["https://unpkg.com/recharts@2.12.7/umd/Recharts.min.js",
-                             "https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.min.js"] },
+                             "https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.min.js",
+                             "https://unpkg.com/recharts/umd/Recharts.min.js"] },
     { name: "compiler", urls: ["https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.7/babel.min.js",
                                "https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"] }
   ];
@@ -2726,15 +2733,32 @@ function App() {
         Object.keys(ICON_PATHS).map(function (n) { return "const " + n + " = __ICONS." + n + ";"; }).join("\n") + "\n";
 
       var source = document.getElementById("app-source").textContent;
-      ["React", "ReactDOM", "XLSX", "Recharts", "Babel"].forEach(function (g) {
+      ["React", "ReactDOM", "XLSX", "Babel"].forEach(function (g) {
         if (!window[g]) throw new Error(g + " did not load");
       });
+
+      /* If the chart library is missing, stub it out rather than refusing to
+         start. Every other part of the app works fine without charts. */
+      var RECHARTS_NAMES = ["BarChart","Bar","AreaChart","Area","ComposedChart","Line","Cell","LabelList",
+        "XAxis","YAxis","CartesianGrid","Tooltip","ReferenceLine","ResponsiveContainer",
+        "RadialBarChart","RadialBar","PolarAngleAxis"];
+      var charts = window.Recharts;
+      if (!charts) {
+        console.warn("Chart library unavailable; the rest of the app still works.");
+        var Absent = function () {
+          return React.createElement("div",
+            { className: "text-xs text-slate-400 py-10 text-center" },
+            "Chart unavailable \u2014 reload when you're back online");
+        };
+        charts = {};
+        RECHARTS_NAMES.forEach(function (n) { charts[n] = Absent; });
+      }
 
       var code = Babel.transform(preamble + source + "\nwindow.__LedgerApp = App;", {
         presets: [["react", { runtime: "classic" }]]
       }).code;
 
-      new Function("React", "Recharts", "XLSX", "__ICONS", code)(React, Recharts, XLSX, Icons);
+      new Function("React", "Recharts", "XLSX", "__ICONS", code)(React, charts, XLSX, Icons);
       var App = window.__LedgerApp;
       if (!App) throw new Error("the app did not compile");
 

@@ -18,7 +18,9 @@ const crypto = require("crypto");
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
-const PUBLIC_DIR = path.join(__dirname, "public");
+/* Works whether index.html sits in ./public or beside this file. */
+const PUBLIC_DIR = process.env.PUBLIC_DIR
+  || (fs.existsSync(path.join(__dirname, "public")) ? path.join(__dirname, "public") : __dirname);
 const USER = process.env.APP_USER || "me";
 const PASS = process.env.APP_PASSWORD || "";
 const MAX_BODY = 2 * 1024 * 1024; // settings are a few KB; this is generous
