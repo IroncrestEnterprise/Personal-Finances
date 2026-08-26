@@ -294,11 +294,13 @@ function enrich(txn, rules, opts, overrides, catMap) {
   let name = null;
   let category = null;
   let source = "auto";
+  let ruleId = null;
 
   // Your rules run first.
   for (const r of rules) {
     if (r.enabled === false) continue;
     if (ruleMatches(r, raw, raw)) {
+      ruleId = r.id;
       if (r.rename) name = r.rename;
       if (r.category) { category = r.category; source = "rule"; }
       break;
@@ -330,7 +332,7 @@ function enrich(txn, rules, opts, overrides, catMap) {
      rules under its old name, so translate it on the way out. */
   if (catMap && catMap[category]) category = catMap[category];
 
-  return { ...txn, cleanDesc: name, category, source };
+  return { ...txn, cleanDesc: name, category, source, ruleId };
 }
 
 const overrideKey = (t) => `${t.date}|${t.rawAmount ?? t.amount}|${(t.rawDesc || "").slice(0, 60)}`;
@@ -1197,6 +1199,9 @@ function App() {
   const [filterSource, setFilterSource] = useState("all");
   const [filterCat, setFilterCat] = useState("all");
   const [onlyReview, setOnlyReview] = useState(false);
+  const [filterRule, setFilterRule] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [limit, setLimit] = useState(150);
   const [view, setView] = useState("dashboard");
   const [openings, setOpenings] = useState({});
@@ -1475,11 +1480,14 @@ function App() {
     return pool.filter((t) => {
       if (filterSource !== "all" && t.sourceId !== filterSource) return false;
       if (filterCat !== "all" && t.category !== filterCat) return false;
+      if (filterRule !== "all" && t.ruleId !== filterRule) return false;
+      if (dateFrom && (!t.date || t.date < dateFrom)) return false;
+      if (dateTo && (!t.date || t.date > dateTo)) return false;
       if (onlyReview && t.category !== "Uncategorized") return false;
       if (q && !(t.cleanDesc.toLowerCase().includes(q) || t.rawDesc.toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview]);
+  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview, filterRule, dateFrom, dateTo]);
 
   const stats = useMemo(() => {
     let inflow = 0, outflow = 0;
@@ -1497,7 +1505,7 @@ function App() {
   }, [visible, transactions]);
 
   /* ---- actions ---- */
-  const jumpToLedger = ({ account, category, review, search: q, settings } = {}) => {
+  const jumpToLedger = ({ account, category, review, search: q, settings, rule } = {}) => {
     if (settings) {
       setExpanded(account || null);
       setView("settings");
@@ -1505,8 +1513,11 @@ function App() {
     }
     setFilterSource(account || "all");
     setFilterCat(category || "all");
+    setFilterRule(rule || "all");
     setOnlyReview(!!review);
     setSearch(q || "");
+    setDateFrom(""); setDateTo("");
+    setShowDeleted(false);
     setLimit(150);
     setView("ledger");
   };
@@ -1541,6 +1552,50 @@ function App() {
     setOverrides((o) => { const n = { ...o }; delete n[overrideKey(txn)]; return n; });
 
   /* ---- categories ---- */
+  const ruleCounts = useMemo(() => {
+    const m = {};
+    for (const t of live) if (t.ruleId) m[t.ruleId] = (m[t.ruleId] || 0) + 1;
+    return m;
+  }, [live]);
+
+  /* Months that actually have transactions, newest first. */
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    for (const t of live) if (t.date) set.add(t.date.slice(0, 7));
+    return [...set].sort().reverse();
+  }, [live]);
+
+  const monthName = (key) => {
+    const [y, m] = key.split("-");
+    return new Date(Date.UTC(+y, +m - 1, 1)).toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  };
+
+  const pickMonth = (key) => {
+    if (!key) { setDateFrom(""); setDateTo(""); return; }
+    const [y, m] = key.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    setDateFrom(`${key}-01`);
+    setDateTo(`${key}-${String(last).padStart(2, "0")}`);
+  };
+
+  /* Which month the current range corresponds to, if any. */
+  const activeMonth = useMemo(() => {
+    if (!dateFrom || !dateTo) return "";
+    const key = dateFrom.slice(0, 7);
+    const [y, m] = key.split("-").map(Number);
+    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+    return dateFrom === `${key}-01` && dateTo === `${key}-${String(last).padStart(2, "0")}` ? key : "";
+  }, [dateFrom, dateTo]);
+
+  const filtersActive =
+    filterSource !== "all" || filterCat !== "all" || filterRule !== "all" ||
+    onlyReview || !!search || !!dateFrom || !!dateTo;
+
+  const clearFilters = () => {
+    setFilterSource("all"); setFilterCat("all"); setFilterRule("all");
+    setOnlyReview(false); setSearch(""); setDateFrom(""); setDateTo("");
+  };
+
   const catCounts = useMemo(() => {
     const m = {};
     for (const t of live) m[t.category] = (m[t.category] || 0) + 1;
@@ -1807,6 +1862,32 @@ function App() {
                 <option value="all">All categories</option>
                 {categories.map((c) => <option key={c} value={c}>{c}</option>)}
               </select>
+              <div className="flex items-center gap-1 border border-slate-300 rounded-lg px-1.5 py-1">
+                <select
+                  value={activeMonth}
+                  onChange={(e) => pickMonth(e.target.value)}
+                  className="text-sm bg-transparent focus:outline-none"
+                  title="Jump to a month"
+                >
+                  <option value="">Any month</option>
+                  {monthOptions.map((m) => <option key={m} value={m}>{monthName(m)}</option>)}
+                </select>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  title="From this date"
+                  className="text-sm bg-transparent border-l border-slate-200 pl-1.5 focus:outline-none"
+                />
+                <span className="text-slate-400 text-sm">to</span>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  title="Up to this date"
+                  className="text-sm bg-transparent focus:outline-none"
+                />
+              </div>
               <label className="flex items-center gap-1.5 text-sm text-slate-700">
                 <input type="checkbox" checked={onlyReview} onChange={(e) => setOnlyReview(e.target.checked)} className="accent-indigo-600" />
                 Needs review
@@ -1834,6 +1915,49 @@ function App() {
                 <Plus size={14} /> New rule
               </button>
             </div>
+
+            {filtersActive && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-slate-500">Showing {visible.length} of {live.length}:</span>
+                {filterRule !== "all" && (
+                  <button
+                    onClick={() => setFilterRule("all")}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-indigo-100 text-indigo-800 hover:bg-indigo-200"
+                  >
+                    rule: {rules.find((r) => r.id === filterRule)?.match || "unknown"} <X size={11} />
+                  </button>
+                )}
+                {filterSource !== "all" && (
+                  <button onClick={() => setFilterSource("all")} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+                    {sources.find((a) => a.id === filterSource)?.name || "account"} <X size={11} />
+                  </button>
+                )}
+                {filterCat !== "all" && (
+                  <button onClick={() => setFilterCat("all")} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full ${chipFor(filterCat)}`}>
+                    {filterCat} <X size={11} />
+                  </button>
+                )}
+                {(dateFrom || dateTo) && (
+                  <button
+                    onClick={() => { setDateFrom(""); setDateTo(""); }}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300"
+                  >
+                    {activeMonth ? monthName(activeMonth) : `${dateFrom || "start"} to ${dateTo || "end"}`} <X size={11} />
+                  </button>
+                )}
+                {onlyReview && (
+                  <button onClick={() => setOnlyReview(false)} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-800 hover:bg-amber-200">
+                    needs review <X size={11} />
+                  </button>
+                )}
+                {search && (
+                  <button onClick={() => setSearch("")} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+                    "{search}" <X size={11} />
+                  </button>
+                )}
+                <button onClick={clearFilters} className="text-slate-500 hover:text-slate-900 underline">Clear all</button>
+              </div>
+            )}
 
             {/* table */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -1996,6 +2120,7 @@ function App() {
                 <h2 className="text-sm font-semibold text-slate-800">Rules</h2>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Checked top to bottom, first match wins. A rule can rename a merchant, set its category, or both.
+                  Click any rule to see the transactions it catches.
                 </p>
               </div>
               <button
@@ -2023,12 +2148,18 @@ function App() {
                       <th className="text-left px-3 py-2">When the description</th>
                       <th className="text-left px-3 py-2 w-56">Shows as</th>
                       <th className="text-left px-3 py-2 w-44">Category</th>
+                      <th className="text-right px-3 py-2 w-24">Matches</th>
                       <th className="text-right px-3 py-2 w-24">Order</th>
                     </tr>
                   </thead>
                   <tbody>
                     {rules.map((r, i) => (
-                      <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <tr
+                        key={r.id}
+                        onClick={() => jumpToLedger({ rule: r.id })}
+                        title="See the transactions this rule catches"
+                        className="border-b border-slate-100 hover:bg-indigo-50 cursor-pointer"
+                      >
                         <td className="px-4 py-2.5 text-slate-400 tabular-nums">{i + 1}</td>
                         <td className="px-3 py-2.5 min-w-0">
                           <span className="text-slate-500 mr-1.5">{r.type}</span>
@@ -2044,7 +2175,12 @@ function App() {
                             <span className="text-slate-400 text-xs">automatic guess</span>
                           )}
                         </td>
-                        <td className="px-3 py-2.5">
+                        <td className="px-3 py-2.5 text-right tabular-nums">
+                          {ruleCounts[r.id]
+                            ? <span className="text-slate-700">{ruleCounts[r.id]}</span>
+                            : <span className="text-slate-400" title="No loaded transaction matches this rule">0</span>}
+                        </td>
+                        <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             <button onClick={() => moveRule(r.id, -1)} disabled={i === 0} className="text-slate-400 hover:text-slate-800 disabled:opacity-25"><ChevronUp size={15} /></button>
                             <button onClick={() => moveRule(r.id, 1)} disabled={i === rules.length - 1} className="text-slate-400 hover:text-slate-800 disabled:opacity-25"><ChevronDown size={15} /></button>
