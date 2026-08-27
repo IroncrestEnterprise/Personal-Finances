@@ -561,6 +561,10 @@ function chipFor(cat) {
   return CHIPS[h % CHIPS.length];
 }
 
+const MENU = "absolute left-0 top-full mt-1 z-30 w-52 bg-white border border-slate-200 rounded-lg shadow-lg py-1 normal-case tracking-normal font-normal text-slate-700";
+const ITEM = "w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 hover:text-indigo-800";
+const DIVIDER = "px-3 pt-2 pb-1 text-xs text-slate-400 border-t border-slate-100 mt-1";
+
 const STORE_KEY = "ledger-cleaner:config-v1";
 /* Loaded statements are cached on this computer only. They are deliberately
    kept out of STORE_KEY so they never travel to a server or a settings file. */
@@ -641,6 +645,222 @@ function summarize(txns) {
     merchants,
     recurring,
   };
+}
+
+/* ============================================================================
+ * 8b. SPENDING BY CATEGORY, MONTH BY MONTH
+ *   Every category, not just the top few. Transfers are excluded and deposits
+ *   ignored, so this is money out only.
+ * ==========================================================================*/
+function monthRange(key) {
+  const [y, m] = key.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return [`${key}-01`, `${key}-${String(last).padStart(2, "0")}`];
+}
+
+function fullMonthName(key) {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-US", {
+    month: "long", year: "numeric", timeZone: "UTC",
+  });
+}
+
+function SpendByCategory({ transactions, categories, onJump }) {
+  const [month, setMonth] = useState("");
+  const [showEmpty, setShowEmpty] = useState(false);
+
+  /* One pass: spend per category per month. */
+  const byMonth = useMemo(() => {
+    const acc = {};
+    for (const t of transactions) {
+      if (t.category === "Transfers" || t.amount >= 0) continue;
+      const k = monthKey(t.date);
+      if (!k) continue;
+      const bucket = acc[k] || (acc[k] = { total: 0, cats: {} });
+      const amt = Math.abs(t.amount);
+      bucket.total += amt;
+      bucket.cats[t.category] = (bucket.cats[t.category] || 0) + amt;
+    }
+    return acc;
+  }, [transactions]);
+
+  const months = useMemo(() => Object.keys(byMonth).sort().reverse(), [byMonth]);
+  const selected = month || months[0] || "";
+  const isAll = month === "all";
+  const prevMonth = isAll ? null : months[months.indexOf(selected) + 1] || null;
+
+  /* Newest six months, oldest first, for the trend bars. */
+  const trendMonths = useMemo(() => months.slice(0, 6).reverse(), [months]);
+
+  const rows = useMemo(() => {
+    const current = {};
+    if (isAll) {
+      for (const k of months) {
+        for (const [c, v] of Object.entries(byMonth[k].cats)) current[c] = (current[c] || 0) + v;
+      }
+    } else if (byMonth[selected]) {
+      Object.assign(current, byMonth[selected].cats);
+    }
+    const previous = prevMonth ? byMonth[prevMonth].cats : {};
+
+    /* Union of the category list and anything actually seen in the data. */
+    const names = new Set(categories.filter((c) => c !== "Transfers" && c !== "Income"));
+    Object.keys(current).forEach((c) => names.add(c));
+
+    const total = Object.values(current).reduce((a, b) => a + b, 0);
+
+    return {
+      total,
+      list: [...names]
+        .map((name) => {
+          const amount = current[name] || 0;
+          const before = previous[name] || 0;
+          return {
+            name,
+            amount,
+            before,
+            share: total ? (amount / total) * 100 : 0,
+            change: before ? ((amount - before) / before) * 100 : amount ? null : 0,
+            trend: trendMonths.map((k) => byMonth[k].cats[name] || 0),
+            /* Divide by every month on record, so the column sums to the total row. */
+            months: isAll ? months.length : 1,
+          };
+        })
+        .sort((a, b) => b.amount - a.amount),
+    };
+  }, [byMonth, months, selected, prevMonth, isAll, categories, trendMonths]);
+
+  const visible = showEmpty ? rows.list : rows.list.filter((r) => r.amount > 0);
+  const hiddenCount = rows.list.length - visible.length;
+  const range = isAll || !selected ? null : monthRange(selected);
+
+  if (!months.length) {
+    return (
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 px-4 py-10 text-center">
+        <p className="text-sm text-slate-600">No dated spending yet.</p>
+        <p className="text-xs text-slate-500 mt-1">Add a statement and this fills in month by month.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-slate-200">
+      <div className="px-4 pt-3.5 pb-2 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-slate-800">Spending by category</h2>
+          <p className="text-xs text-slate-500 mt-0.5">
+            {isAll
+              ? `Every month on record — ${months.length} in total.`
+              : `${fullMonthName(selected)}${prevMonth ? `, compared with ${fullMonthName(prevMonth)}` : ""}.`}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={showEmpty}
+              onChange={(e) => setShowEmpty(e.target.checked)}
+              className="accent-indigo-600"
+            />
+            Show unused
+          </label>
+          <select
+            value={isAll ? "all" : selected}
+            onChange={(e) => setMonth(e.target.value)}
+            className="text-sm border border-slate-300 rounded-lg px-2 py-1.5 bg-white"
+          >
+            {months.map((m) => <option key={m} value={m}>{fullMonthName(m)}</option>)}
+            <option value="all">All months</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-slate-50 border-y border-slate-200 text-xs font-medium uppercase tracking-widest text-slate-500">
+              <th className="text-left px-4 py-2">Category</th>
+              <th className="text-left px-3 py-2 w-32">Share</th>
+              <th className="text-left px-3 py-2 w-24">6-mo trend</th>
+              <th className="text-right px-3 py-2 w-28">{isAll ? "Total" : "Spent"}</th>
+              <th className="text-right px-4 py-2 w-28">{isAll ? "Avg / mo" : "vs prev"}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((r) => {
+              const peak = Math.max(1, ...r.trend);
+              return (
+                <tr
+                  key={r.name}
+                  onClick={() => onJump({ category: r.name, from: range?.[0], to: range?.[1] })}
+                  title="See these transactions"
+                  className="border-b border-slate-100 hover:bg-indigo-50 cursor-pointer"
+                >
+                  <td className="px-4 py-2">
+                    <span className={`px-2 py-0.5 rounded text-xs ${chipFor(r.name)}`}>{r.name}</span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1.5 bg-slate-100 rounded">
+                        <div className="h-full bg-indigo-500 rounded" style={{ width: `${r.share}%` }} />
+                      </div>
+                      <span className="text-xs text-slate-400 tabular-nums w-8 text-right">
+                        {r.share >= 1 ? `${r.share.toFixed(0)}%` : ""}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-end gap-0.5 h-5">
+                      {r.trend.map((v, i) => (
+                        <div key={i} className="flex-1 bg-slate-100 rounded-sm flex items-end h-full" title={fullMonthName(trendMonths[i])}>
+                          <div
+                            className="w-full bg-indigo-400 rounded-sm"
+                            style={{ height: v ? `${Math.max(12, (v / peak) * 100)}%` : "2px" }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </td>
+                  <td className={`px-3 py-2 text-right tabular-nums ${r.amount ? "text-slate-800" : "text-slate-300"}`}>
+                    {money(r.amount)}
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-xs">
+                    {isAll ? (
+                      <span className="text-slate-500">{money(r.months ? r.amount / r.months : 0)}</span>
+                    ) : r.change === null ? (
+                      <span className="text-slate-400">new</span>
+                    ) : r.change === 0 && !r.amount ? (
+                      <span className="text-slate-300">—</span>
+                    ) : (
+                      <span className={r.change > 0 ? "text-rose-600" : r.change < 0 ? "text-emerald-600" : "text-slate-400"}>
+                        {r.change > 0 ? "+" : ""}{r.change.toFixed(0)}%
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            <tr className="bg-slate-50 font-semibold">
+              <td className="px-4 py-2">Total</td>
+              <td className="px-3 py-2" />
+              <td className="px-3 py-2" />
+              <td className="px-3 py-2 text-right tabular-nums">{money(rows.total)}</td>
+              <td className="px-4 py-2 text-right tabular-nums text-xs text-slate-500">
+                {isAll && months.length ? money(rows.total / months.length) : ""}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {hiddenCount > 0 && (
+        <p className="px-4 py-2 text-xs text-slate-500 border-t border-slate-100">
+          {hiddenCount} {hiddenCount === 1 ? "category has" : "categories have"} no spending
+          {isAll ? "" : " this month"}. Tick "Show unused" to include them.
+        </p>
+      )}
+    </div>
+  );
 }
 
 /* ============================================================================
@@ -763,7 +983,7 @@ function KpiCard({ label, value, delta, positiveIsGood = true, tint, icon, spark
   );
 }
 
-function DashboardView({ sources, transactions, openings, onOpening, onJump }) {
+function DashboardView({ sources, transactions, categories, openings, onOpening, onJump }) {
   const [period, setPeriod] = useState("all");
 
   const latest = useMemo(
@@ -897,6 +1117,8 @@ function DashboardView({ sources, transactions, openings, onOpening, onJump }) {
 
   return (
     <div className="space-y-4">
+      <SpendByCategory transactions={transactions} categories={categories} onJump={onJump} />
+
       {/* toolbar */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="flex rounded-lg border border-slate-300 overflow-hidden bg-white">
@@ -1202,6 +1424,9 @@ function App() {
   const [filterRule, setFilterRule] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [flow, setFlow] = useState("all");
+  const [sort, setSort] = useState({ key: "date", dir: "desc" });
+  const [headerMenu, setHeaderMenu] = useState(null);
   const [limit, setLimit] = useState(150);
   const [view, setView] = useState("dashboard");
   const [openings, setOpenings] = useState({});
@@ -1474,7 +1699,7 @@ function App() {
   const live = useMemo(() => transactions.filter((t) => !t.deleted), [transactions]);
   const deletedCount = useMemo(() => transactions.filter((t) => t.deleted).length, [transactions]);
 
-  const visible = useMemo(() => {
+  const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     const pool = showDeleted ? transactions.filter((t) => t.deleted) : live;
     return pool.filter((t) => {
@@ -1483,11 +1708,26 @@ function App() {
       if (filterRule !== "all" && t.ruleId !== filterRule) return false;
       if (dateFrom && (!t.date || t.date < dateFrom)) return false;
       if (dateTo && (!t.date || t.date > dateTo)) return false;
+      if (flow === "out" && t.amount >= 0) return false;
+      if (flow === "in" && t.amount < 0) return false;
       if (onlyReview && t.category !== "Uncategorized") return false;
       if (q && !(t.cleanDesc.toLowerCase().includes(q) || t.rawDesc.toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview, filterRule, dateFrom, dateTo]);
+  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview, filterRule, dateFrom, dateTo, flow]);
+
+  /* Sorting is applied after filtering so the two stay independent. */
+  const visible = useMemo(() => {
+    const dir = sort.dir === "asc" ? 1 : -1;
+    const rows = [...filtered];
+    rows.sort((a, b) => {
+      if (sort.key === "merchant") return dir * a.cleanDesc.localeCompare(b.cleanDesc);
+      if (sort.key === "category") return dir * (a.category || "").localeCompare(b.category || "");
+      if (sort.key === "amount") return dir * (a.amount - b.amount);
+      return dir * (a.date || "").localeCompare(b.date || "");
+    });
+    return rows;
+  }, [filtered, sort]);
 
   const stats = useMemo(() => {
     let inflow = 0, outflow = 0;
@@ -1505,7 +1745,7 @@ function App() {
   }, [visible, transactions]);
 
   /* ---- actions ---- */
-  const jumpToLedger = ({ account, category, review, search: q, settings, rule } = {}) => {
+  const jumpToLedger = ({ account, category, review, search: q, settings, rule, from, to } = {}) => {
     if (settings) {
       setExpanded(account || null);
       setView("settings");
@@ -1516,7 +1756,8 @@ function App() {
     setFilterRule(rule || "all");
     setOnlyReview(!!review);
     setSearch(q || "");
-    setDateFrom(""); setDateTo("");
+    setDateFrom(from || ""); setDateTo(to || "");
+    setFlow("all");
     setShowDeleted(false);
     setLimit(150);
     setView("ledger");
@@ -1589,11 +1830,14 @@ function App() {
 
   const filtersActive =
     filterSource !== "all" || filterCat !== "all" || filterRule !== "all" ||
-    onlyReview || !!search || !!dateFrom || !!dateTo;
+    onlyReview || !!search || !!dateFrom || !!dateTo || flow !== "all";
+
+  const sortMark = (key) =>
+    sort.key !== key ? null : sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
 
   const clearFilters = () => {
     setFilterSource("all"); setFilterCat("all"); setFilterRule("all");
-    setOnlyReview(false); setSearch(""); setDateFrom(""); setDateTo("");
+    setOnlyReview(false); setSearch(""); setDateFrom(""); setDateTo(""); setFlow("all");
   };
 
   const catCounts = useMemo(() => {
@@ -1945,6 +2189,11 @@ function App() {
                     {activeMonth ? monthName(activeMonth) : `${dateFrom || "start"} to ${dateTo || "end"}`} <X size={11} />
                   </button>
                 )}
+                {flow !== "all" && (
+                  <button onClick={() => setFlow("all")} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+                    {flow === "out" ? "money out" : "money in"} <X size={11} />
+                  </button>
+                )}
                 {onlyReview && (
                   <button onClick={() => setOnlyReview(false)} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-800 hover:bg-amber-200">
                     needs review <X size={11} />
@@ -1958,6 +2207,8 @@ function App() {
                 <button onClick={clearFilters} className="text-slate-500 hover:text-slate-900 underline">Clear all</button>
               </div>
             )}
+
+            {headerMenu && <div className="fixed inset-0 z-20" onClick={() => setHeaderMenu(null)} />}
 
             {/* table */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden">
@@ -1991,10 +2242,90 @@ function App() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-200 text-xs font-medium uppercase tracking-widest text-slate-500">
-                      <th className="text-left px-3 py-2 w-20">Date</th>
-                      <th className="text-left px-3 py-2">Merchant</th>
-                      <th className="text-left px-3 py-2 w-44">Category</th>
-                      <th className="text-right px-3 py-2 w-28">Amount</th>
+                      {/* Each header opens a small sort + filter menu. */}
+                      <th className="text-left px-3 py-2 w-24 relative">
+                        <button onClick={() => setHeaderMenu(headerMenu === "date" ? null : "date")} className="inline-flex items-center gap-1 hover:text-slate-900">
+                          Date {sortMark("date")}
+                        </button>
+                        {headerMenu === "date" && (
+                          <div className={MENU}>
+                            <button className={ITEM} onClick={() => { setSort({ key: "date", dir: "desc" }); setHeaderMenu(null); }}>Newest first</button>
+                            <button className={ITEM} onClick={() => { setSort({ key: "date", dir: "asc" }); setHeaderMenu(null); }}>Oldest first</button>
+                            <div className={DIVIDER}>Jump to a month</div>
+                            <div className="max-h-44 overflow-y-auto">
+                              <button className={ITEM} onClick={() => { pickMonth(""); setHeaderMenu(null); }}>Any month</button>
+                              {monthOptions.map((m) => (
+                                <button key={m} className={ITEM} onClick={() => { pickMonth(m); setHeaderMenu(null); }}>
+                                  {monthName(m)}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </th>
+
+                      <th className="text-left px-3 py-2 relative">
+                        <button onClick={() => setHeaderMenu(headerMenu === "merchant" ? null : "merchant")} className="inline-flex items-center gap-1 hover:text-slate-900">
+                          Merchant {sortMark("merchant")}
+                        </button>
+                        {headerMenu === "merchant" && (
+                          <div className={MENU}>
+                            <button className={ITEM} onClick={() => { setSort({ key: "merchant", dir: "asc" }); setHeaderMenu(null); }}>A to Z</button>
+                            <button className={ITEM} onClick={() => { setSort({ key: "merchant", dir: "desc" }); setHeaderMenu(null); }}>Z to A</button>
+                            <div className={DIVIDER}>Contains</div>
+                            <div className="px-1 pb-1">
+                              <input
+                                autoFocus
+                                value={search}
+                                onChange={(e) => setSearch(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") setHeaderMenu(null); }}
+                                placeholder="Type to narrow"
+                                className="w-full text-xs border border-slate-300 rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </th>
+
+                      <th className="text-left px-3 py-2 w-44 relative">
+                        <button onClick={() => setHeaderMenu(headerMenu === "category" ? null : "category")} className="inline-flex items-center gap-1 hover:text-slate-900">
+                          Category {sortMark("category")}
+                        </button>
+                        {headerMenu === "category" && (
+                          <div className={MENU}>
+                            <button className={ITEM} onClick={() => { setSort({ key: "category", dir: "asc" }); setHeaderMenu(null); }}>A to Z</button>
+                            <button className={ITEM} onClick={() => { setSort({ key: "category", dir: "desc" }); setHeaderMenu(null); }}>Z to A</button>
+                            <div className={DIVIDER}>Show only</div>
+                            <div className="max-h-44 overflow-y-auto">
+                              <button className={ITEM} onClick={() => { setFilterCat("all"); setHeaderMenu(null); }}>All categories</button>
+                              {categories.filter((c) => catCounts[c]).map((c) => (
+                                <button key={c} className={ITEM} onClick={() => { setFilterCat(c); setHeaderMenu(null); }}>
+                                  <span className="flex items-center justify-between gap-2">
+                                    <span className="truncate">{c}</span>
+                                    <span className="text-slate-400 tabular-nums">{catCounts[c]}</span>
+                                  </span>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </th>
+
+                      <th className="text-right px-3 py-2 w-28 relative">
+                        <button onClick={() => setHeaderMenu(headerMenu === "amount" ? null : "amount")} className="inline-flex items-center gap-1 hover:text-slate-900">
+                          Amount {sortMark("amount")}
+                        </button>
+                        {headerMenu === "amount" && (
+                          <div className={MENU + " right-0 left-auto"}>
+                            <button className={ITEM} onClick={() => { setSort({ key: "amount", dir: "asc" }); setHeaderMenu(null); }}>Biggest spend first</button>
+                            <button className={ITEM} onClick={() => { setSort({ key: "amount", dir: "desc" }); setHeaderMenu(null); }}>Biggest deposit first</button>
+                            <div className={DIVIDER}>Show only</div>
+                            <button className={ITEM} onClick={() => { setFlow("all"); setHeaderMenu(null); }}>Everything</button>
+                            <button className={ITEM} onClick={() => { setFlow("out"); setHeaderMenu(null); }}>Money out</button>
+                            <button className={ITEM} onClick={() => { setFlow("in"); setHeaderMenu(null); }}>Money in</button>
+                          </div>
+                        )}
+                      </th>
                       <th className="w-16" />
                     </tr>
                   </thead>
