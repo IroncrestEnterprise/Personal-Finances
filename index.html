@@ -1424,7 +1424,7 @@ function App() {
   const [filterRule, setFilterRule] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [flow, setFlow] = useState("all");
+  const [flowFilter, setFlowFilter] = useState("all");
   const [sort, setSort] = useState({ key: "date", dir: "desc" });
   const [headerMenu, setHeaderMenu] = useState(null);
   const [limit, setLimit] = useState(150);
@@ -1708,13 +1708,13 @@ function App() {
       if (filterRule !== "all" && t.ruleId !== filterRule) return false;
       if (dateFrom && (!t.date || t.date < dateFrom)) return false;
       if (dateTo && (!t.date || t.date > dateTo)) return false;
-      if (flow === "out" && t.amount >= 0) return false;
-      if (flow === "in" && t.amount < 0) return false;
+      if (flowFilter === "out" && t.amount >= 0) return false;
+      if (flowFilter === "in" && t.amount < 0) return false;
       if (onlyReview && t.category !== "Uncategorized") return false;
       if (q && !(t.cleanDesc.toLowerCase().includes(q) || t.rawDesc.toLowerCase().includes(q))) return false;
       return true;
     });
-  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview, filterRule, dateFrom, dateTo, flow]);
+  }, [transactions, live, showDeleted, search, filterSource, filterCat, onlyReview, filterRule, dateFrom, dateTo, flowFilter]);
 
   /* Sorting is applied after filtering so the two stay independent. */
   const visible = useMemo(() => {
@@ -1757,7 +1757,7 @@ function App() {
     setOnlyReview(!!review);
     setSearch(q || "");
     setDateFrom(from || ""); setDateTo(to || "");
-    setFlow("all");
+    setFlowFilter("all");
     setShowDeleted(false);
     setLimit(150);
     setView("ledger");
@@ -1830,14 +1830,14 @@ function App() {
 
   const filtersActive =
     filterSource !== "all" || filterCat !== "all" || filterRule !== "all" ||
-    onlyReview || !!search || !!dateFrom || !!dateTo || flow !== "all";
+    onlyReview || !!search || !!dateFrom || !!dateTo || flowFilter !== "all";
 
   const sortMark = (key) =>
     sort.key !== key ? null : sort.dir === "asc" ? <ChevronUp size={12} /> : <ChevronDown size={12} />;
 
   const clearFilters = () => {
     setFilterSource("all"); setFilterCat("all"); setFilterRule("all");
-    setOnlyReview(false); setSearch(""); setDateFrom(""); setDateTo(""); setFlow("all");
+    setOnlyReview(false); setSearch(""); setDateFrom(""); setDateTo(""); setFlowFilter("all");
   };
 
   const catCounts = useMemo(() => {
@@ -2189,9 +2189,9 @@ function App() {
                     {activeMonth ? monthName(activeMonth) : `${dateFrom || "start"} to ${dateTo || "end"}`} <X size={11} />
                   </button>
                 )}
-                {flow !== "all" && (
-                  <button onClick={() => setFlow("all")} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300">
-                    {flow === "out" ? "money out" : "money in"} <X size={11} />
+                {flowFilter !== "all" && (
+                  <button onClick={() => setFlowFilter("all")} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300">
+                    {flowFilter === "out" ? "money out" : "money in"} <X size={11} />
                   </button>
                 )}
                 {onlyReview && (
@@ -2320,9 +2320,9 @@ function App() {
                             <button className={ITEM} onClick={() => { setSort({ key: "amount", dir: "asc" }); setHeaderMenu(null); }}>Biggest spend first</button>
                             <button className={ITEM} onClick={() => { setSort({ key: "amount", dir: "desc" }); setHeaderMenu(null); }}>Biggest deposit first</button>
                             <div className={DIVIDER}>Show only</div>
-                            <button className={ITEM} onClick={() => { setFlow("all"); setHeaderMenu(null); }}>Everything</button>
-                            <button className={ITEM} onClick={() => { setFlow("out"); setHeaderMenu(null); }}>Money out</button>
-                            <button className={ITEM} onClick={() => { setFlow("in"); setHeaderMenu(null); }}>Money in</button>
+                            <button className={ITEM} onClick={() => { setFlowFilter("all"); setHeaderMenu(null); }}>Everything</button>
+                            <button className={ITEM} onClick={() => { setFlowFilter("out"); setHeaderMenu(null); }}>Money out</button>
+                            <button className={ITEM} onClick={() => { setFlowFilter("in"); setHeaderMenu(null); }}>Money in</button>
                           </div>
                         )}
                       </th>
