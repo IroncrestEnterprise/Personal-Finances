@@ -919,7 +919,7 @@ function buildMonthly(txns, openingTotal) {
 }
 
 /* ---- reusable card shell ---- */
-function Card({ title, action, className = "", bodyClass = "p-4", children }) {
+function Card({ title = null, action = null, className = "", bodyClass = "p-4", children }) {
   return (
     <div className={`bg-white rounded-xl shadow-sm border border-slate-200 ${className}`}>
       {title && (
@@ -2051,6 +2051,7 @@ function App() {
           <DashboardView
             sources={sources}
             transactions={live}
+            categories={categories}
             openings={openings}
             onOpening={(name, val) => setOpenings((o) => ({ ...o, [name]: val }))}
             onJump={jumpToLedger}
@@ -3310,29 +3311,13 @@ function App() {
       var App = window.__LedgerApp;
       if (!App) throw new Error("the app did not compile");
 
-      /* React 18 throws render errors asynchronously, so a plain try/catch
-         around render() misses them and the screen just goes white. Catch
-         them properly and show something useful instead. */
-      function Boundary(props) {
-        var state = React.useState(null);
-        var err = state[0], setErr = state[1];
-        React.useEffect(function () {
-          function onError(e) { setErr(e.error || e.reason || e.message || String(e)); }
-          window.addEventListener("error", onError);
-          window.addEventListener("unhandledrejection", onError);
-          return function () {
-            window.removeEventListener("error", onError);
-            window.removeEventListener("unhandledrejection", onError);
-          };
-        }, []);
-        if (err) return React.createElement(Crash, { err: err });
-        return props.children;
-      }
-
+      /* Only a class component can catch an error thrown during render.
+         The function version I tried first never sees them, which is how a
+         crash turned into a blank page. */
       var NL = String.fromCharCode(10);
 
-      function Crash(props) {
-        var e = props.err || {};
+      function crashMarkup(err) {
+        var e = err || {};
         return React.createElement("div", { style: {
           minHeight: "100vh", background: "#f1f5f9", padding: "32px",
           fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: "#334155"
@@ -3348,8 +3333,26 @@ function App() {
         );
       }
 
+
+      function ErrorBoundary(props) { this.props = props; this.state = { err: null }; }
+      ErrorBoundary.prototype = Object.create(React.Component.prototype);
+      ErrorBoundary.prototype.constructor = ErrorBoundary;
+      ErrorBoundary.getDerivedStateFromError = function (err) { return { err: err }; };
+      ErrorBoundary.prototype.componentDidCatch = function (err) { console.error(err); };
+      ErrorBoundary.prototype.render = function () {
+        return this.state.err ? crashMarkup(this.state.err) : this.props.children;
+      };
+
+      /* Installed before render, so an error on the very first paint is caught. */
+      window.addEventListener("error", function (e) {
+        var el = document.getElementById("root");
+        if (el && el.childElementCount === 0) {
+          try { ReactDOM.createRoot(el).render(crashMarkup(e.error || e)); } catch (x) {}
+        }
+      });
+
       var root = ReactDOM.createRoot(document.getElementById("root"));
-      root.render(React.createElement(Boundary, null, React.createElement(App)));
+      root.render(React.createElement(ErrorBoundary, null, React.createElement(App)));
 
       /* Last resort: if React bailed out and left the page empty, say so. */
       setTimeout(function () {
