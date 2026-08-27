@@ -3310,7 +3310,58 @@ function App() {
       var App = window.__LedgerApp;
       if (!App) throw new Error("the app did not compile");
 
-      ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+      /* React 18 throws render errors asynchronously, so a plain try/catch
+         around render() misses them and the screen just goes white. Catch
+         them properly and show something useful instead. */
+      function Boundary(props) {
+        var state = React.useState(null);
+        var err = state[0], setErr = state[1];
+        React.useEffect(function () {
+          function onError(e) { setErr(e.error || e.reason || e.message || String(e)); }
+          window.addEventListener("error", onError);
+          window.addEventListener("unhandledrejection", onError);
+          return function () {
+            window.removeEventListener("error", onError);
+            window.removeEventListener("unhandledrejection", onError);
+          };
+        }, []);
+        if (err) return React.createElement(Crash, { err: err });
+        return props.children;
+      }
+
+      var NL = String.fromCharCode(10);
+
+      function Crash(props) {
+        var e = props.err || {};
+        return React.createElement("div", { style: {
+          minHeight: "100vh", background: "#f1f5f9", padding: "32px",
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", color: "#334155"
+        } },
+          React.createElement("h1", { style: { fontSize: "16px", marginBottom: "8px", color: "#0f172a" } },
+            "The app hit an error"),
+          React.createElement("p", { style: { fontSize: "13px", marginBottom: "16px" } },
+            "Your saved settings and statements are untouched. Send this message along and it can be fixed."),
+          React.createElement("pre", { style: {
+            whiteSpace: "pre-wrap", wordBreak: "break-word", fontSize: "12px",
+            background: "#fff", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px"
+          } }, String(e.message || e) + NL + NL + String(e.stack || "").split(NL).slice(0, 8).join(NL))
+        );
+      }
+
+      var root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(React.createElement(Boundary, null, React.createElement(App)));
+
+      /* Last resort: if React bailed out and left the page empty, say so. */
+      setTimeout(function () {
+        var el = document.getElementById("root");
+        if (el && el.childElementCount === 0) {
+          el.innerHTML = '<div style="min-height:100vh;display:grid;place-items:center;'
+            + 'font-family:system-ui;color:#334155;background:#f1f5f9;padding:24px;text-align:center">'
+            + '<div><p>The app failed to render.</p>'
+            + '<p style="font-size:12px;color:#94a3b8;margin-top:8px">'
+            + 'Open the browser console (F12) and send the first red error.</p></div></div>';
+        }
+      }, 1200);
 
       console.log("Ledger Cleaner storage mode:", window.__ledgerMode);
       if (window.__ledgerMode === "memory") {
